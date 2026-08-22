@@ -241,6 +241,37 @@ describe("createCoder", () => {
     expect(sandbox.listFiles).not.toHaveBeenCalled();
   });
 
+  it("enforces the configured cumulative run token budget", async () => {
+    const sandbox = fakeSandbox();
+    const fetchImpl = vi.fn().mockReturnValue(
+      response({
+        usage: { total_tokens: 101 },
+        output: [
+          {
+            type: "function_call",
+            name: "list_files",
+            call_id: "call-1",
+            arguments: JSON.stringify({ path: null })
+          }
+        ]
+      })
+    );
+
+    await expect(
+      createCoder(
+        {
+          apiKey: "key",
+          model: "model",
+          maxOutputTokens: 1000,
+          maxTotalTokens: 100,
+          fetchImpl
+        },
+        sandbox
+      ).run({ prompt: "Build", plan, fileTree: [] })
+    ).rejects.toMatchObject({ code: "CODER_LIMIT", message: "Coder token limit exceeded." });
+    expect(sandbox.listFiles).not.toHaveBeenCalled();
+  });
+
   it("returns tool errors to the model and does not mark the run complete", async () => {
     const sandbox = fakeSandbox();
     const fetchImpl = vi

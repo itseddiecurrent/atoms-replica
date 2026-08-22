@@ -13,8 +13,9 @@ database migrations, builds shared packages, and starts both processes:
 ```
 
 For local migrations the launcher derives the Supabase IPv4 Session Pooler endpoint (port 5432)
-from `DATABASE_URL`. This avoids local IPv6 timeouts on the Direct DB hostname. Railway's Web
-pre-deploy migration continues to use `DATABASE_URL_DIRECT` as documented for production.
+from `DATABASE_URL`. This avoids IPv6 timeouts on the Direct DB hostname. Railway's Web pre-deploy
+migration uses the same Session Pooler endpoint through the compatibility variable
+`DATABASE_URL_DIRECT`.
 
 Use `./run-local.sh --check` for a read-only prerequisite check. The existing lower-level commands
 remain available when Web and Worker need to be debugged separately.

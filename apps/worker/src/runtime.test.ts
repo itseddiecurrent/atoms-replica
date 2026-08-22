@@ -499,4 +499,25 @@ describe("processNextRun", () => {
       expect.objectContaining({ code: "RUN_TIMEOUT" })
     );
   });
+
+  it("maps a Coder token budget limit to AI_LIMIT instead of RUN_TIMEOUT", async () => {
+    claimNextRun.mockResolvedValue({
+      id: "run-1",
+      projectId: "project-1",
+      triggerMessageId: "message-1"
+    });
+    getMessageContent.mockResolvedValue("Build a dashboard");
+    const error = Object.assign(new Error("Coder token limit exceeded."), {
+      code: "CODER_LIMIT",
+      limit: "tokens"
+    });
+    const coder = { run: vi.fn().mockRejectedValue(error) };
+
+    await processNextRun("database" as never, "worker-1", undefined, coder);
+
+    expect(failRun).toHaveBeenCalledWith(
+      "database",
+      expect.objectContaining({ code: "AI_LIMIT", message: "Coder token limit exceeded." })
+    );
+  });
 });

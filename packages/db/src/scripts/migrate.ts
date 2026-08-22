@@ -5,8 +5,9 @@ import { createDatabaseClient } from "../client.js";
 import { getMigrationEnv } from "../env.js";
 
 const env = getMigrationEnv();
-// Railway supports the Direct DB endpoint used for schema changes. Application
-// traffic continues to use the transaction pooler through DATABASE_URL.
+// Migrations use a dedicated/session-capable connection. On IPv4 platforms,
+// DATABASE_URL_DIRECT points to Supavisor session mode (port 5432). Application
+// traffic continues to use transaction mode through DATABASE_URL.
 const client = createDatabaseClient(env.DATABASE_URL_DIRECT);
 
 try {

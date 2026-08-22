@@ -65,28 +65,28 @@ describe("environment schemas", () => {
   });
 
   it("accepts an empty optional E2B template id", () => {
-    expect(
-      parseWorkerEnv({
-        NEXT_PUBLIC_SUPABASE_URL: "https://example.supabase.co",
-        OPENAI_API_KEY: "openai-key",
-        OPENAI_MODEL: "model",
-        OPENAI_MAX_OUTPUT_TOKENS: "12000",
-        DATABASE_URL: "postgresql://user:password@localhost:5432/app",
-        SUPABASE_SERVICE_ROLE_KEY: "service-role",
-        SUPABASE_STORAGE_BUCKET: "project-snapshots",
-        E2B_API_KEY: "e2b-key",
-        E2B_TEMPLATE_ID: "",
-        E2B_SANDBOX_TIMEOUT_SECONDS: "900",
-        E2B_PREVIEW_PORT: "5173",
-        WORKER_CONCURRENCY: "1",
-        WORKER_DISABLED: "false",
-        WORKER_POLL_INTERVAL_MS: "1000",
-        RUN_HEARTBEAT_INTERVAL_MS: "5000",
-        RUN_STALE_AFTER_SECONDS: "30",
-        MAX_AGENT_TURNS: "20",
-        MAX_AGENT_TOOL_CALLS: "60",
-        MAX_AGENT_REPAIR_ATTEMPTS: "2"
-      }).E2B_TEMPLATE_ID
-    ).toBe("");
+    const parsed = parseWorkerEnv({
+      NEXT_PUBLIC_SUPABASE_URL: "https://example.supabase.co",
+      OPENAI_API_KEY: "openai-key",
+      OPENAI_MODEL: "model",
+      OPENAI_MAX_OUTPUT_TOKENS: "12000",
+      DATABASE_URL: "postgresql://user:password@localhost:5432/app",
+      SUPABASE_SERVICE_ROLE_KEY: "service-role",
+      SUPABASE_STORAGE_BUCKET: "project-snapshots",
+      E2B_API_KEY: "e2b-key",
+      E2B_TEMPLATE_ID: "",
+      E2B_SANDBOX_TIMEOUT_SECONDS: "900",
+      E2B_PREVIEW_PORT: "5173",
+      WORKER_CONCURRENCY: "1",
+      WORKER_DISABLED: "false",
+      WORKER_POLL_INTERVAL_MS: "1000",
+      RUN_HEARTBEAT_INTERVAL_MS: "5000",
+      RUN_STALE_AFTER_SECONDS: "30",
+      MAX_AGENT_TURNS: "20",
+      MAX_AGENT_TOOL_CALLS: "60",
+      MAX_AGENT_REPAIR_ATTEMPTS: "2"
+    });
+    expect(parsed.E2B_TEMPLATE_ID).toBe("");
+    expect(parsed.MAX_AGENT_TOTAL_TOKENS).toBe("200000");
   });
 });

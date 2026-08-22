@@ -455,7 +455,7 @@ Web 和 Worker 共用 `packages/shared` 中的 Zod schema，确保数据库事�
 ### Step 2：建立 Supabase 数据层 ✅ 已完成
 
 1. 在 `packages/db` 初始化 Drizzle PostgreSQL client。
-2. 开发和 migration 命令使用 `DATABASE_URL_DIRECT`，Web/Worker 运行时使用 pooler `DATABASE_URL`。
+2. Migration 命令使用独立的 `DATABASE_URL_DIRECT` 变量（IPv4 环境填 Session Pooler 5432），Web/Worker 运行时使用 Transaction Pooler `DATABASE_URL`。
 3. 按第 6 节创建 `users`、`projects`、`conversations`、`messages`、`runs`、`run_events`、`project_files` 和 `snapshots` schema；`runs` 从第一版 migration 起就包含 `worker_id`、`heartbeat_at`、`attempt_count` 和 `available_at`。
 4. 给 `projects.user_id`、`messages.conversation_id`、`runs.project_id`、`runs(status,available_at,created_at)`、`run_events(run_id,id)` 和 `project_files(project_id,path)` 建索引。
 5. 对 `project_files(project_id,path)` 建唯一约束；用 transaction 保证文件版本递增。
@@ -474,7 +474,7 @@ Web 和 Worker 共用 `packages/shared` 中的 Zod schema，确保数据库事�
 - 已建立完整外键和级联规则；Message/Run 循环引用使用 deferred constraints，Project/Snapshot 循环引用在建表后追加。
 - `project_files` 使用 `(project_id, path)` 复合主键，并在每次 upsert 时以 transaction-safe SQL 自动递增版本和更新 SHA-256 hash。
 - 已实现用户 upsert、原子创建 Project/Conversation/Message/Run、追加及分页读取事件、文件 upsert、Snapshot 创建和项目清理 repositories。
-- 实际运行使用 Supabase Shared Transaction Pooler `DATABASE_URL`，关闭 prepared statements；`DATABASE_URL_DIRECT` 保留给支持 IPv6 的管理场景。
+- 实际运行使用 Supabase Shared Transaction Pooler `DATABASE_URL`，关闭 prepared statements；migration 通过 `DATABASE_URL_DIRECT` 使用 Direct DB，或在 IPv4 环境使用 Shared Session Pooler 5432。
 - 已确认 `project-snapshots` bucket 存在且保持 private，并验证上传、下载和测试对象清理。
 - 已添加数据库 schema 单元测试与真实 Supabase 集成测试；集成测试会创建唯一测试数据并在结束后自动清理。
 - `pnpm --filter @atom-replica/db test:integration` 已通过：1 个测试文件、2 个真实集成测试全部成功，耗时约 13.75 秒。
@@ -691,7 +691,7 @@ Web 和 Worker 共用 `packages/shared` 中的 Zod schema，确保数据库事�
 - 构建成功后会启动 Vite、轮询 Preview HTTP 健康状态、把 URL 保存到 Project，并依次发布 `preview.ready` 和完成事件；依赖安装与 Preview 启动失败分别使用明确错误码。
 - 工作区已监听 coding、validating、command、validation 和 Preview SSE 事件；Preview URL 可在刷新后从数据库恢复，并通过不含 `allow-same-origin` 的受限 iframe 展示。
 - 已实现受 Project 所有权保护的 `POST /api/projects/:projectId/runtime/restart`；Restart 会连接现有 E2B Sandbox、重启固定端口的 Vite、再次执行健康检查并保存新 URL。
-- 已把 `MAX_AGENT_TURNS`、`MAX_AGENT_TOOL_CALLS` 和 `MAX_AGENT_REPAIR_ATTEMPTS` 纳入 Worker 环境变量校验，并在 Worker 创建 Coder/验证器时应用这些限制。
+- 已把 `MAX_AGENT_TURNS`、`MAX_AGENT_TOOL_CALLS`、`MAX_AGENT_TOTAL_TOKENS` 和 `MAX_AGENT_REPAIR_ATTEMPTS` 纳入 Worker 环境变量校验，并在 Worker 创建 Coder/验证器时应用这些限制；累计 Run token 预算独立于单次 OpenAI 输出上限，生产默认值为 200,000。
 - 新增 Worker 构建成功、一次自动修复成功、修复次数耗尽测试，以及 Preview iframe、Restart API、Sandbox Restart 和事件 schema 测试；全项目 `typecheck`、`test`、`lint`、`format:check` 和生产 `build` 均已通过。
 - 当前受限执行环境无法访问 E2B 云端，因此真实 E2B Preview 端到端 smoke test 尚未在本环境执行；Adapter、Worker 和 API 行为已通过隔离测试覆盖。
 
@@ -791,7 +791,7 @@ Web 和 Worker 共用 `packages/shared` 中的 Zod schema，确保数据库事�
 - 已新增 PostgreSQL `runtime_jobs` migration。手动文件保存和 Preview 重启不再由 Web 直接访问 E2B，而是原子写入持久任务并由 Worker 执行、heartbeat、失败终态和宕机恢复；Web 通过受所有权保护的状态 API 等待结果。同一 Project 的 Agent Run 与 Runtime Job 互斥，避免重复重启、版本竞争和费用失控。
 - Web 已彻底移除 `@atom-replica/sandbox`、`E2B_API_KEY` 和 OpenAI 依赖，也不再需要 Supabase service-role/Storage 配置；Worker 独占 OpenAI、E2B 和 Snapshot Storage 权限，且不接收 Firebase Browser/Admin 配置。两套最小变量模板位于 `deploy/web.env.example` 和 `deploy/worker.env.example`。
 - 已修复两项只会在真实生产产物中暴露的问题：所有 ESM workspace package 现从 `dist/*.js` 正确解析，Worker 在 build 后可由原生 Node 直接启动；E2B `getHost()` 返回的 hostname 现会规范化为 HTTPS Preview URL，不再产生无协议 iframe 地址。
-- 已新增 `railway.web.json` 和 `railway.worker.json`：分别使用依赖感知的 Monorepo build、独立 start command、失败重启策略；只有 Web 执行编译后的 Direct DB pre-deploy migration 和 `/api/health` 检查，Worker 不公开网络域名。完整配置契约记录在 `docs/deployment/railway.md`。
+- 已新增 `railway.web.json` 和 `railway.worker.json`：分别使用依赖感知的 Monorepo build、独立 start command、失败重启策略；只有 Web 通过 IPv4 Session Pooler 执行编译后的 pre-deploy migration 和 `/api/health` 检查，Worker 不公开网络域名。完整配置契约记录在 `docs/deployment/railway.md`。
 - 已加入限制明确的 CSP（Preview 默认仅允许 `https://*.e2b.app`，可通过非敏感变量收窄）、iframe sandbox、X-Frame-Options、nosniff、Referrer/Permissions/COOP 等生产响应头，并覆盖恶意 Preview origin/header injection 测试。
 - 认证越权、Runtime Job 所有权、SSE 重连/断开、沙箱与下载路径穿越、`.env`/依赖/构建输出排除、危险命令、命令超时、大输出截断、严格 iframe 权限、数据库 health failure 和环境权限分离均已有自动化测试。
 - 已提供固定 Prompt 的环境无关 live smoke：`pnpm test:smoke` 直接针对 `E2E_BASE_URL`，通过 Firebase 登录后覆盖创建 Todo App、主动断开并恢复 SSE、Preview、继续聊天、手动编辑经 Worker 同步、重启 Preview、下载 ZIP 和清理 Project；不依赖本地 Web/Worker 进程。人工浏览器验收清单位于 `docs/testing/manual-production-smoke.md`。
@@ -804,8 +804,8 @@ Web 和 Worker 共用 `packages/shared` 中的 Zod schema，确保数据库事�
 2. 执行 secret scan 和 `git status`，确认 `.env`、Firebase Admin 私钥、Supabase service role key、OpenAI key 和 E2B key均未被跟踪；只提交 `.env.example` 或变量说明，不提交真实 `.env`。
 3. 创建 GitHub repository，添加 remote，提交全部 Demo 源码并推送 `main`；记录最终 commit SHA 和 GitHub repository URL。
 4. 在 Railway 创建一个 Project，通过 GitHub repository 添加两个 Service：`web` 和 `worker`。两个 Service 使用同一个仓库，但分别配置 Step 14 中的 build/start command。
-5. 只让 `web` Service 在 pre-deploy 阶段执行一次数据库 migration；Worker 不重复执行 migration，并在 migration 成功后启动轮询。Web 必须启用 Railway Outbound IPv6 才能访问默认 IPv6-only 的 Supabase Direct DB；运行流量继续使用 IPv4 Pooler。
-6. 在 Railway Variables 中录入真实环境变量，不从 GitHub 仓库或 `.env` 文件导入密钥。`DATABASE_URL` 使用 Supabase pooler，migration 使用 direct URL。
+5. 只让 `web` Service 在 pre-deploy 阶段通过 Supabase IPv4 Session Pooler 执行一次数据库 migration；Worker 不重复执行 migration，并在 migration 成功后启动轮询。
+6. 在 Railway Variables 中录入真实环境变量，不从 GitHub 仓库或 `.env` 文件导入密钥。`DATABASE_URL` 使用 Transaction Pooler 6543，migration 的 `DATABASE_URL_DIRECT` 使用 Session Pooler 5432。
 7. 为 Web Service 配置 `/api/health` health check，并在 Networking → Public Networking 生成 Railway HTTPS domain；Worker 不生成公共 domain。
 8. 将生成的 `https://<service>.up.railway.app` 写入 Web Service 的 `NEXT_PUBLIC_APP_URL`，重新部署 Web。
 9. 把 Railway 域名加入 Firebase Authentication Authorized domains，并确认 Google/邮箱登录回调正常。

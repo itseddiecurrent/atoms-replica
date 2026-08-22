@@ -49,6 +49,7 @@ export const workerEnvSchema = z.object({
   RUN_STALE_AFTER_SECONDS: positiveIntegerString,
   MAX_AGENT_TURNS: positiveIntegerString,
   MAX_AGENT_TOOL_CALLS: positiveIntegerString,
+  MAX_AGENT_TOTAL_TOKENS: positiveIntegerString.default("200000"),
   MAX_AGENT_REPAIR_ATTEMPTS: positiveIntegerString,
   MAX_RUN_DURATION_SECONDS: positiveIntegerString.default("600"),
   MAX_COMMAND_DURATION_SECONDS: positiveIntegerString.default("120"),

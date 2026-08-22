@@ -309,7 +309,8 @@ export class CoderError extends Error {
   constructor(
     message: string,
     public readonly code: "CODER_ERROR" | "CODER_LIMIT" | "CODER_INVALID_TOOL" | "CODER_CANCELLED",
-    public readonly retryable = false
+    public readonly retryable = false,
+    public readonly limit?: "duration" | "tokens" | "tool_calls" | "turns"
   ) {
     super(message);
     this.name = "CoderError";
@@ -405,7 +406,7 @@ export function createCoder(options: CoderOptions, sandbox: CoderSandbox) {
   const fetchImpl = options.fetchImpl ?? fetch;
   const maxTurns = options.maxTurns ?? 20;
   const maxToolCalls = options.maxToolCalls ?? 40;
-  const maxTotalTokens = options.maxTotalTokens ?? 40_000;
+  const maxTotalTokens = options.maxTotalTokens ?? 200_000;
   const maxDurationMs = options.maxDurationMs ?? 10 * 60 * 1000;
   const commandTimeoutMs = options.commandTimeoutMs ?? 60_000;
   const requestTimeoutMs = options.requestTimeoutMs ?? 60_000;
@@ -594,14 +595,14 @@ export function createCoder(options: CoderOptions, sandbox: CoderSandbox) {
         if (await options.shouldCancel?.())
           throw new CoderError("Run cancelled.", "CODER_CANCELLED");
         if (Date.now() - startedAt > maxDurationMs)
-          throw new CoderError("Coder duration limit exceeded.", "CODER_LIMIT");
+          throw new CoderError("Coder duration limit exceeded.", "CODER_LIMIT", false, "duration");
         turns += 1;
         const response = await callModel(currentInput);
         const usage = response.usage as { total_tokens?: number } | undefined;
         totalTokens += usage?.total_tokens ?? 0;
         pendingTokens += usage?.total_tokens ?? 0;
         if (totalTokens > maxTotalTokens)
-          throw new CoderError("Coder token limit exceeded.", "CODER_LIMIT");
+          throw new CoderError("Coder token limit exceeded.", "CODER_LIMIT", false, "tokens");
         const output = Array.isArray(response.output) ? response.output : [];
         currentInput = [...currentInput, ...output];
         const outputText = typeof response.output_text === "string" ? response.output_text : "";
@@ -616,7 +617,12 @@ export function createCoder(options: CoderOptions, sandbox: CoderSandbox) {
             throw new CoderError("Run cancelled.", "CODER_CANCELLED");
           toolCalls += 1;
           if (toolCalls > maxToolCalls)
-            throw new CoderError("Coder tool-call limit exceeded.", "CODER_LIMIT");
+            throw new CoderError(
+              "Coder tool-call limit exceeded.",
+              "CODER_LIMIT",
+              false,
+              "tool_calls"
+            );
           const name = typeof call.name === "string" ? call.name : "";
           const callId = typeof call.call_id === "string" ? call.call_id : "";
           if (!name || !callId)
@@ -677,7 +683,7 @@ export function createCoder(options: CoderOptions, sandbox: CoderSandbox) {
           throw new CoderError("Coder stopped without calling finish.", "CODER_ERROR");
         }
       }
-      throw new CoderError("Coder turn limit exceeded.", "CODER_LIMIT");
+      throw new CoderError("Coder turn limit exceeded.", "CODER_LIMIT", false, "turns");
     }
   };
 }

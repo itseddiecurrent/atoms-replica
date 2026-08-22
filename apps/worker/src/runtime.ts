@@ -169,7 +169,16 @@ function classifyRunError(error: unknown): { code: ErrorCode; message: string } 
   if (code === "PLAN_INVALID") return { code: errorCodes.PLAN_INVALID, message };
   if (code === "OPENAI_ERROR" || code === "CODER_ERROR" || code === "CODER_INVALID_TOOL")
     return { code: errorCodes.AI_FAILED, message };
-  if (code === "CODER_LIMIT") return { code: errorCodes.RUN_TIMEOUT, message };
+  if (code === "CODER_LIMIT") {
+    const limit =
+      error && typeof error === "object" && "limit" in error
+        ? String((error as { limit?: unknown }).limit)
+        : "";
+    return {
+      code: limit === "duration" ? errorCodes.RUN_TIMEOUT : errorCodes.AI_LIMIT,
+      message
+    };
+  }
   if (code === "CODER_CANCELLED") return { code: errorCodes.RUN_CANCELLED, message };
   return { code: errorCodes.INTERNAL_ERROR, message };
 }

@@ -197,6 +197,7 @@ if (mode === "disabled") {
           maxOutputTokens: Number(env.OPENAI_MAX_OUTPUT_TOKENS),
           maxTurns: Number(env.MAX_AGENT_TURNS),
           maxToolCalls: Number(env.MAX_AGENT_TOOL_CALLS),
+          maxTotalTokens: Number(env.MAX_AGENT_TOTAL_TOKENS),
           maxDurationMs: Number(env.MAX_RUN_DURATION_SECONDS) * 1_000,
           commandTimeoutMs: Number(env.MAX_COMMAND_DURATION_SECONDS) * 1_000,
           shouldCancel: () => isRunCancelled(database.db, run.id),

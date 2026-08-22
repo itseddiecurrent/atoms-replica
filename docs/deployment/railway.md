@@ -20,10 +20,10 @@ HTTP 503 when PostgreSQL is unavailable, so a Web release is not promoted agains
 `DATABASE_URL` must be the Supabase transaction pooler URL used by application traffic. Web does
 not receive the Supabase service-role key or Storage configuration.
 `DATABASE_URL_DIRECT` is used only by the Web pre-deploy migration. Never run the migration from the
-Worker service. Supabase's Direct DB hostname is IPv6-only unless the paid IPv4 add-on is enabled,
-while Railway outbound IPv6 is opt-in. In Web **Settings → Networking**, enable **Outbound IPv6**
-before the first deployment. Without it, pre-deploy migration fails with `ENETUNREACH` or a connect
-timeout. Worker uses the IPv4 transaction pooler and does not require this toggle.
+Worker service. Despite the compatibility name, Railway should set this variable to the Supabase
+Shared Pooler **session mode** URL on port 5432. Session mode supports migrations over IPv4 and
+avoids depending on the IPv6-only Direct DB hostname or Railway's optional outbound IPv6 setting.
+`DATABASE_URL` uses the same Pooler credentials and hostname on transaction-mode port 6543.
 
 ## Worker service
 
@@ -39,16 +39,19 @@ runs and durable runtime jobs for manual file synchronization and Preview restar
 must not contain either secret. The Worker does not receive Firebase browser or Firebase Admin
 configuration.
 
+`OPENAI_MAX_OUTPUT_TOKENS` limits one Responses API call, including visible output and reasoning
+tokens. `MAX_AGENT_TOTAL_TOKENS` is the separate cumulative budget for the complete multi-turn Run;
+the production baseline is `200000`. Keep both variables on the Worker only.
+
 ## Required external settings
 
-1. Enable Railway outbound IPv6 on Web so its Direct DB pre-deploy migration can connect.
-2. Keep the Supabase `project-snapshots` bucket private.
-3. Add the Railway Web hostname to Firebase Authentication authorized domains.
-4. Set `NEXT_PUBLIC_APP_URL` to the final Railway HTTPS URL, then redeploy Web.
-5. Set `E2B_PREVIEW_CSP_ORIGIN` to the narrow Preview origin supported by the active E2B template.
+1. Keep the Supabase `project-snapshots` bucket private.
+2. Add the Railway Web hostname to Firebase Authentication authorized domains.
+3. Set `NEXT_PUBLIC_APP_URL` to the final Railway HTTPS URL, then redeploy Web.
+4. Set `E2B_PREVIEW_CSP_ORIGIN` to the narrow Preview origin supported by the active E2B template.
    The default is `https://*.e2b.app`; never use `*`.
-6. Use Node.js 24. The root `engines`, `.node-version`, and `.nvmrc` all pin the supported major.
-7. Configure an OpenAI Project budget and E2B limits outside this application.
+5. Use Node.js 24. The root `engines`, `.node-version`, and `.nvmrc` all pin the supported major.
+6. Configure an OpenAI Project budget and E2B limits outside this application.
 
 ## Release gate
 
