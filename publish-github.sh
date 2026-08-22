@@ -74,6 +74,18 @@ else
 fi
 
 printf '\n[4/4] Pushing main to GitHub...\n'
+# VS Code exports an askpass socket into integrated terminals. After VS Code or
+# its Git extension restarts, the stale socket can swallow Git's credential
+# prompt and fail with ECONNREFUSED. Use the real terminal for this explicit
+# publish action; the macOS credential helper can cache the resulting token.
+unset GIT_ASKPASS
+unset SSH_ASKPASS
+unset SSH_ASKPASS_REQUIRE
+unset VSCODE_GIT_ASKPASS_NODE
+unset VSCODE_GIT_ASKPASS_MAIN
+unset VSCODE_GIT_ASKPASS_EXTRA_ARGS
+unset VSCODE_GIT_IPC_HANDLE
+export GIT_TERMINAL_PROMPT=1
 git push -u origin main
 
 printf '\nGitHub publish completed: %s\n' "${repository_url%.git}"
