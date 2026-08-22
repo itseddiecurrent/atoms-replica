@@ -1,0 +1,26 @@
+{
+  "name": "@atom-replica/worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@atom-replica/agent": "workspace:*",
+    "@atom-replica/db": "workspace:*",
+    "@atom-replica/sandbox": "workspace:*",
+    "@atom-replica/shared": "workspace:*",
+    "dotenv": "^17.2.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0",
+    "vitest": "^4.0.0"
+  }
+}

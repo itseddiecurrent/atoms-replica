@@ -1,0 +1,215 @@
+import assert from "node:assert/strict";
+import { loadEnvFile } from "node:process";
+
+try {
+  loadEnvFile();
+} catch (error) {
+  if (error?.code !== "ENOENT") throw error;
+}
+
+const fixedPrompt = "创建一个带添加、完成和删除功能的 Todo App";
+const baseUrl = required("E2E_BASE_URL").replace(/\/$/, "");
+const email = required("E2E_EMAIL");
+const password = required("E2E_PASSWORD");
+const firebaseApiKey = process.env.E2E_FIREBASE_API_KEY ?? required("NEXT_PUBLIC_FIREBASE_API_KEY");
+const maxWaitMs = Number(process.env.E2E_MAX_WAIT_MS ?? 12 * 60_000);
+let projectId;
+let cookie;
+
+function required(name) {
+  const value = process.env[name];
+  if (!value) throw new Error(`${name} is required for the live smoke test.`);
+  return value;
+}
+
+async function jsonRequest(path, options = {}) {
+  const response = await fetch(`${baseUrl}${path}`, {
+    ...options,
+    headers: {
+      ...(cookie ? { Cookie: cookie } : {}),
+      ...(options.body ? { "Content-Type": "application/json" } : {}),
+      ...options.headers
+    },
+    signal: AbortSignal.timeout(30_000)
+  });
+  const body = await response.json().catch(() => null);
+  if (!response.ok)
+    throw new Error(
+      `${options.method ?? "GET"} ${path} returned ${response.status}: ${JSON.stringify(body)}`
+    );
+  return { response, body };
+}
+
+function parseSseBlock(block) {
+  const id = block.match(/^id:\s*(\d+)/m)?.[1];
+  const event = block.match(/^event:\s*(.+)$/m)?.[1];
+  const data = block.match(/^data:\s*(.+)$/m)?.[1];
+  if (!id || !event || !data) return undefined;
+  return { id: Number(id), event, data: JSON.parse(data) };
+}
+
+async function consumeRun(runId, { reconnectAfterFirstEvent = false } = {}) {
+  const deadline = Date.now() + maxWaitMs;
+  let lastEventId = 0;
+  let previewUrl;
+  let reconnectPending = reconnectAfterFirstEvent;
+  while (Date.now() < deadline) {
+    const controller = new AbortController();
+    const remaining = Math.max(1, deadline - Date.now());
+    const timeout = setTimeout(() => controller.abort(), remaining);
+    const response = await fetch(`${baseUrl}/api/runs/${runId}/events`, {
+      headers: {
+        Cookie: cookie,
+        Accept: "text/event-stream",
+        ...(lastEventId ? { "Last-Event-ID": String(lastEventId) } : {})
+      },
+      signal: controller.signal
+    });
+    assert.equal(response.status, 200, `SSE returned ${response.status}`);
+    assert.match(response.headers.get("content-type") ?? "", /text\/event-stream/);
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let forceReconnect = false;
+    try {
+      while (Date.now() < deadline) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        for (;;) {
+          const boundary = buffer.indexOf("\n\n");
+          if (boundary < 0) break;
+          const block = buffer.slice(0, boundary);
+          buffer = buffer.slice(boundary + 2);
+          const parsed = parseSseBlock(block);
+          if (!parsed) continue;
+          lastEventId = Math.max(lastEventId, parsed.id);
+          if (parsed.event === "preview.ready") previewUrl = parsed.data.payload?.url;
+          if (["run.failed", "run.cancelled"].includes(parsed.event))
+            throw new Error(`Run ended as ${parsed.event}: ${JSON.stringify(parsed.data.payload)}`);
+          if (parsed.event === "run.completed") return { previewUrl, lastEventId };
+          if (reconnectPending) {
+            reconnectPending = false;
+            forceReconnect = true;
+            await reader.cancel();
+            break;
+          }
+        }
+        if (forceReconnect) break;
+      }
+    } finally {
+      clearTimeout(timeout);
+      await reader.cancel().catch(() => undefined);
+    }
+  }
+  throw new Error(`Run ${runId} did not complete within ${maxWaitMs}ms.`);
+}
+
+async function waitForRuntimeJob(runtimeJobId) {
+  const deadline = Date.now() + maxWaitMs;
+  while (Date.now() < deadline) {
+    const { body } = await jsonRequest(`/api/runtime-jobs/${runtimeJobId}`);
+    if (body.status === "completed") return body.resultJson ?? {};
+    if (body.status === "failed") throw new Error(body.errorMessage ?? "Runtime job failed.");
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+  }
+  throw new Error(`Runtime job ${runtimeJobId} timed out.`);
+}
+
+try {
+  console.info("1/9 Checking production readiness...");
+  const health = await fetch(`${baseUrl}/api/health`, { signal: AbortSignal.timeout(10_000) });
+  assert.equal(health.status, 200);
+  assert.equal((await health.json()).database, "ok");
+
+  console.info("2/9 Signing in through Firebase and creating a server session...");
+  const firebase = await fetch(
+    `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${encodeURIComponent(firebaseApiKey)}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password, returnSecureToken: true }),
+      signal: AbortSignal.timeout(30_000)
+    }
+  );
+  const firebaseBody = await firebase.json();
+  assert.equal(firebase.status, 200, JSON.stringify(firebaseBody));
+  const session = await fetch(`${baseUrl}/api/auth/session`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ idToken: firebaseBody.idToken }),
+    redirect: "manual",
+    signal: AbortSignal.timeout(30_000)
+  });
+  assert.equal(session.status, 200);
+  cookie = session.headers.get("set-cookie")?.match(/^([^;]+)/)?.[1];
+  assert.ok(cookie, "Session response did not set a cookie.");
+
+  console.info("3/9 Creating the fixed Todo App and testing SSE reconnection...");
+  const created = await jsonRequest("/api/projects", {
+    method: "POST",
+    body: JSON.stringify({ prompt: fixedPrompt })
+  });
+  projectId = created.body.projectId;
+  const initial = await consumeRun(created.body.runId, { reconnectAfterFirstEvent: true });
+  assert.ok(initial.previewUrl, "Initial run did not publish a Preview URL.");
+
+  console.info("4/9 Checking the live Preview...");
+  const preview = await fetch(initial.previewUrl, { signal: AbortSignal.timeout(30_000) });
+  assert.equal(preview.status, 200);
+  assert.match(await preview.text(), /<html|<div[^>]+id=["']root/i);
+
+  console.info("5/9 Applying a follow-up Agent change...");
+  const followUp = await jsonRequest(`/api/projects/${projectId}/messages`, {
+    method: "POST",
+    body: JSON.stringify({ content: "Add a visible count of remaining Todo items." })
+  });
+  await consumeRun(followUp.body.runId);
+
+  console.info("6/9 Testing manual edit synchronization through the Worker...");
+  const files = (await jsonRequest(`/api/projects/${projectId}/files`)).body.files;
+  const target = files.find((file) => file.path === "src/App.tsx");
+  assert.ok(target, "Generated project is missing src/App.tsx.");
+  const current = (
+    await jsonRequest(
+      `/api/projects/${projectId}/files/content?path=${encodeURIComponent(target.path)}`
+    )
+  ).body;
+  const saved = await jsonRequest(`/api/projects/${projectId}/files/content`, {
+    method: "PUT",
+    body: JSON.stringify({
+      path: target.path,
+      content: `${current.content}\n/* live-smoke-manual-edit */\n`,
+      version: current.version
+    })
+  });
+  await waitForRuntimeJob(saved.body.runtimeJobId);
+
+  console.info("7/9 Testing Preview restart/recovery...");
+  const restart = await jsonRequest(`/api/projects/${projectId}/runtime/restart`, {
+    method: "POST"
+  });
+  const restarted = await waitForRuntimeJob(restart.body.runtimeJobId);
+  assert.ok(restarted.previewUrl, "Restart did not return a Preview URL.");
+
+  console.info("8/9 Downloading and validating the source ZIP...");
+  const download = await fetch(`${baseUrl}/api/projects/${projectId}/download`, {
+    headers: { Cookie: cookie },
+    signal: AbortSignal.timeout(30_000)
+  });
+  assert.equal(download.status, 200);
+  const zip = new Uint8Array(await download.arrayBuffer());
+  assert.equal(new DataView(zip.buffer).getUint32(0, true), 0x04034b50);
+
+  console.info("9/9 Cleaning up the smoke-test project...");
+  await jsonRequest(`/api/projects/${projectId}`, { method: "DELETE" });
+  projectId = undefined;
+  console.info("Live production smoke test passed.");
+} finally {
+  if (projectId && cookie) {
+    await fetch(`${baseUrl}/api/projects/${projectId}`, {
+      method: "DELETE",
+      headers: { Cookie: cookie }
+    }).catch(() => undefined);
+  }
+}

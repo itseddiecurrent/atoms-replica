@@ -1,0 +1,859 @@
+# AI App Builder Demo — Implementation Plan
+
+## 1. 目标
+
+实现一个类似 Atoms/Lovable 核心体验的最小 Demo，但只覆盖以下闭环：
+
+1. 用户在首页通过聊天描述想实现的 Web App。
+2. AI 先生成一份简短、结构化的实施计划。
+3. 页面展示计划后自动继续，AI 在隔离沙箱中创建和修改项目代码（Demo 暂不增加人工确认步骤）。
+4. 构建过程通过流式事件实时显示在左侧聊天区域。
+5. 右侧工作区可以在“应用预览”和“代码编辑器”之间切换。
+6. 每次代码修改后自动刷新预览；用户可以继续聊天要求修改。
+
+这个 Demo 不覆盖多人协作、计费、模板市场、自定义域名、生产级高可用部署、移动 App、完整 Git 工作流或复杂多智能体协作；但最终必须推送到 GitHub，并部署一个可公开访问的 Demo URL。
+
+## 2. 产品范围与页面
+
+### 页面 A：首页 `/`
+
+- 产品介绍和一个主要 Prompt 输入框。
+- 用户输入 App idea，例如：“做一个可以记录每日饮水量的 Dashboard”。
+- 点击创建后：
+  - 创建 Project 和 Conversation。
+  - 将初始 Prompt 保存到数据库。
+  - 跳转至 `/projects/:projectId`。
+
+### 页面 B：生成工作区 `/projects/:projectId`
+
+布局参考截图：
+
+- 左侧：对话和 Agent 活动流。
+  - 用户消息。
+  - AI 的实施计划。
+  - 当前动作，如“创建 package.json”“修改 Dashboard.tsx”“安装依赖”。
+  - 错误、重试和完成状态。
+  - 底部继续修改的 Prompt 输入框。
+- 中间：项目文件树。
+  - 展开/折叠目录。
+  - 点击文件后在编辑器中打开。
+  - 标记正在被 AI 修改的文件。
+- 右侧：两个主要模式。
+  - Preview：沙箱中运行的应用，通过 iframe 展示。
+  - Editor：Monaco Editor 展示文件内容，Demo 阶段允许用户编辑并保存。
+- 顶部：项目名称、生成状态、Preview/Editor 切换、Restart、Download。
+
+## 3. 明确的技术选型
+
+### Web 应用
+
+- Next.js 16（App Router）+ TypeScript
+- React
+- Tailwind CSS
+- shadcn/ui：基础 UI 组件
+- Zustand：仅管理工作区本地 UI 状态，如当前文件、面板和未保存内容
+- TanStack Query：服务端数据、文件内容和 mutation 缓存
+- Monaco Editor：浏览器内代码查看与编辑
+- react-arborist：文件树
+- iframe：渲染沙箱提供的预览 URL
+
+选择单个 Next.js 全栈应用以减少 Demo 的部署和开发复杂度。耗时的 AI/沙箱任务不在普通 HTTP 请求生命周期中执行，而由独立 Worker 处理。
+
+### 后端与持久化
+
+- Next.js Route Handlers：项目、消息、文件、下载等常规 API
+- PostgreSQL（托管服务使用 Supabase Postgres）
+- Drizzle ORM + drizzle-kit：Schema 和 migrations
+- Firebase Authentication：用户注册、登录和浏览器 Session；Demo 先支持 Google 登录和邮箱/密码登录
+- Firebase Admin SDK：后端验证 Firebase ID Token，并签发安全的 HttpOnly Session Cookie
+- Supabase Storage：保存项目 ZIP、快照和可选上传资源
+- PostgreSQL `runs` 表：兼任持久化任务队列；Demo 不引入 Redis
+- 独立 Polling Worker：通过 `FOR UPDATE SKIP LOCKED` 认领 Run，执行 AI Agent loop、调用沙箱并写入结果
+
+### AI 与 Agent
+
+- OpenAI Responses API
+- 默认模型：配置项 `OPENAI_MODEL`，不在代码中写死具体版本
+- Structured Outputs：生成严格的实施计划和最终状态摘要
+- Tool calling：让模型通过受控工具读取、写入和运行项目，而不是直接获得宿主机 shell
+- Responses API 流式输出：把推理过程之外的用户可见内容、工具动作和结果转成工作区事件
+
+Demo 只实现一个 Orchestrator Agent。它按顺序执行“规划 → 编码 → 验证 → 修复”，不实现多个角色并行工作的复杂多智能体系统。UI 可以称其为 Agent，但不要伪造多个智能体。
+
+### 隔离运行环境
+
+- E2B Sandbox API：为每个 Project Session 创建隔离 Linux 沙箱
+- 沙箱内默认模板：Vite + React + TypeScript + Tailwind
+- 包管理器：pnpm
+- 启动命令：`pnpm dev --host 0.0.0.0`
+- Preview：使用 E2B 暴露的临时 HTTPS URL，嵌入 iframe
+
+选择 E2B 而不是直接在应用服务器上执行模型生成的代码。生成代码属于不可信代码，必须与主应用的文件系统、网络凭据和进程隔离。
+
+## 4. 必需的第三方 API / 服务
+
+| 服务 | 用途 | Demo 是否必需 |
+| --- | --- | --- |
+| OpenAI Responses API | 需求理解、结构化计划、工具调用和代码修改决策 | 是 |
+| E2B Sandbox API | 安全执行生成代码、安装依赖、启动开发服务器和提供 Preview URL | 是 |
+| Supabase Postgres | Project、Conversation、Message、Run 和文件索引持久化 | 是 |
+| Firebase Authentication | Google/邮箱登录和用户身份 | 是 |
+| Firebase Admin SDK | 后端校验身份、创建和撤销 Session Cookie | 是 |
+| Supabase Storage | 项目快照、ZIP 下载和上传资源 | 第二阶段必需 |
+| GitHub | 保存最终源码，并作为部署来源 | 最终交付必需 |
+| Railway | 从同一 Monorepo 部署 Web 和长期运行的 Worker，并提供公开 HTTPS URL | 最终交付必需 |
+| Sentry | 前后端错误监控 | 上线 Demo 前建议 |
+
+不需要直接集成 GitHub、Stripe、Vercel Deploy API 或自定义域名。用户下载项目 ZIP 即可满足 Demo 的代码导出需求。
+
+## 5. 总体架构
+
+```text
+Browser
+  ├─ Chat / Activity Stream
+  ├─ File Tree + Monaco Editor
+  └─ Preview iframe
+          │
+          ▼
+Next.js Web/API
+  ├─ Auth and Project APIs
+  ├─ Message submission
+  ├─ File read/write API
+  ├─ SSE event endpoint
+  └─ Download snapshot API
+          │
+          ├──────────────► PostgreSQL / Storage
+          │
+          └─ insert queued run ► PostgreSQL
+                                     ▲
+                                     │ poll/claim
+                               Agent Worker
+                          ├─ OpenAI Responses API
+                          ├─ controlled tools
+                          └─ E2B Sandbox API
+                                  │
+                                  ├─ project filesystem
+                                  ├─ pnpm install/build
+                                  └─ Vite preview URL ──► iframe
+```
+
+部署时至少拆成两个进程：
+
+- `web`：Next.js UI、CRUD API 和 SSE。
+- `worker`：轮询 PostgreSQL `runs` 表并认领任务，负责长时间运行的 Agent 和 Sandbox 操作。
+
+这样浏览器断开、页面刷新或普通 API 超时不会终止生成任务。
+
+## 6. 核心数据模型
+
+### `users`
+
+- `id`（Firebase `uid`，使用 text/varchar，不由数据库生成）
+- `email`
+- `created_at`
+
+### `projects`
+
+- `id`
+- `user_id`
+- `name`
+- `status`: `draft | queued | planning | generating | validating | running | failed`
+- `sandbox_id`，只作为短期恢复线索
+- `preview_url`，短期 URL，不视为永久地址
+- `latest_snapshot_id`
+- `created_at`, `updated_at`
+
+### `conversations`
+
+- `id`
+- `project_id`
+- `created_at`
+
+### `messages`
+
+- `id`
+- `conversation_id`
+- `role`: `user | assistant | system_event`
+- `content`
+- `run_id`
+- `created_at`
+
+### `runs`
+
+- `id`
+- `project_id`
+- `trigger_message_id`
+- `status`: `queued | planning | coding | validating | completed | failed | cancelled`
+- `plan_json`
+- `error_code`, `error_message`
+- `worker_id`, `heartbeat_at`, `attempt_count`, `available_at`
+- `started_at`, `finished_at`
+
+### `run_events`
+
+- `id`（PostgreSQL bigint identity，全局单调递增，供 SSE 重连）
+- `run_id`
+- `type`
+- `payload_json`
+- `created_at`
+
+### `project_files`
+
+- `project_id`
+- `path`
+- `content`
+- `content_hash`
+- `version`
+- `updated_by`: `agent | user`
+- `updated_at`
+
+### `snapshots`
+
+- `id`
+- `project_id`
+- `run_id`
+- `storage_key`
+- `created_at`
+
+数据库中的 `project_files` 是可恢复的最新代码副本；E2B 文件系统是运行时工作区，不作为唯一持久化来源。
+
+状态流保持单向且明确：`Run: queued → planning → coding → validating → completed/failed/cancelled`；Project 在对应阶段同步为 `queued/planning/generating/validating`，成功并有可用 Preview 后为 `running`，不可恢复失败后为 `failed`。Run 是一次请求的执行状态，Project 的 `running` 表示当前应用可预览，不表示 Worker 仍在执行。
+
+## 7. Agent 工作流
+
+每条用户请求对应一个 `run`。Demo 将 Worker concurrency 固定为 1，因此所有 Run 串行执行，不需要分布式锁。Worker 在数据库 transaction 内使用 `SELECT ... FOR UPDATE SKIP LOCKED` 取得最早的 `queued` Run，并立即将其更新为 `planning` 和写入 `worker_id/heartbeat_at`。将来提高并发时，再增加 Project 级 advisory lock 或专用 lock table。
+
+### 阶段 1：规划
+
+输入：用户最新需求、对话摘要、当前文件清单和关键文件内容。
+
+输出严格 JSON：
+
+```json
+{
+  "summary": "要实现的内容",
+  "assumptions": ["明确的合理假设"],
+  "steps": [
+    { "id": "step-1", "title": "创建页面结构", "status": "pending" }
+  ],
+  "acceptanceCriteria": ["页面可运行", "核心交互可操作"]
+}
+```
+
+首个 Demo 可以自动确认计划并继续生成，同时在 UI 中显示计划；不必增加人工确认步骤。
+
+### 阶段 2：编码
+
+向模型暴露有限工具：
+
+- `list_files(path)`
+- `read_file(path)`
+- `write_file(path, content)`
+- `apply_patch(path, patch)`
+- `delete_file(path)`
+- `run_command(command, timeout)`
+- `get_runtime_logs()`
+- `finish(summary)`
+
+工具层必须实施：路径规范化、允许目录限制、命令白名单/风险检查、输出长度限制和超时。API key 永远不能写入沙箱或发送给生成的前端代码。
+
+### 阶段 3：验证和自动修复
+
+Worker 至少执行：
+
+1. `pnpm install`
+2. `pnpm build`
+3. 启动开发服务器
+4. 请求 Preview URL，确认 HTTP 200
+5. 如果失败，将精简后的错误日志交回模型修复
+
+自动修复最多 2 次，防止无限循环和不可控费用。超过限制后以可理解的错误结束 Run，用户可继续发送修改请求。
+
+### 阶段 4：持久化
+
+- 将改变后的文件同步至 `project_files`。
+- 创建 ZIP snapshot 并上传 Storage。
+- 保存最终消息和 Run 状态。
+- 发布 `run.completed` 事件。
+
+## 8. 实时可视化机制
+
+### 事件传输
+
+采用 Server-Sent Events，而不是 WebSocket。当前需求主要是服务端向客户端推送单向生成状态，用户发消息仍走普通 POST；SSE 更简单且支持浏览器自动重连。
+
+端点：
+
+- `POST /api/projects/:id/messages`：保存消息并创建 Run，立即返回 `runId`。
+- `GET /api/runs/:runId/events`：SSE 流。
+
+主要事件：
+
+- `run.queued`
+- `plan.created`
+- `step.started`
+- `assistant.delta`
+- `tool.started`
+- `file.created`
+- `file.updated`
+- `command.output`
+- `preview.ready`
+- `validation.failed`
+- `run.completed`
+- `run.failed`
+
+每个事件带 `eventId`、`runId`、`timestamp` 和结构化 payload。客户端使用 `Last-Event-ID` 重连，服务端从 `run_events` 补发缺失事件。
+
+### Preview 更新
+
+- Vite dev server 检测文件变化并通过 HMR 刷新 iframe 中的应用。
+- 收到 `file.updated` 时刷新文件树和已打开文件内容。
+- 收到 `preview.ready` 时才显示 iframe，之前显示构建状态。
+- iframe 设置严格 `sandbox` 权限；只开放运行应用所必需的能力。
+- 获取 Preview URL 的项目 API 必须验证访问权限。Demo 的 iframe 会直接访问 E2B 临时 URL，因此不要在生成应用或沙箱内放置任何主系统密钥；如未来要求 Preview 本身也必须登录鉴权，需要另行实现支持 HTTP/WebSocket 的反向代理。
+
+## 9. API 设计
+
+- `POST /api/projects`
+  - 在一个数据库 transaction 中创建项目、初始对话、初始消息和 `queued` Run，返回 `projectId/runId`。
+- `GET /api/projects/:id`
+  - 获取项目、当前状态和 Preview 信息。
+- `POST /api/projects/:id/messages`
+  - 添加修改需求并排队新的 Run。
+- `GET /api/projects/:id/files`
+  - 获取文件树。
+- `GET /api/projects/:id/files/content?path=...`
+  - 获取单个文件内容。
+- `PUT /api/projects/:id/files/content`
+  - 保存用户在 Monaco 中的修改，并同步沙箱。
+- `GET /api/runs/:id/events`
+  - SSE 事件流。
+- `POST /api/projects/:id/runtime/restart`
+  - 重启开发服务器。
+- `GET /api/projects/:id/download`
+  - 下载最新 ZIP snapshot。
+- `GET /api/health`
+  - 不访问外部 AI/E2B，仅检查 Web 进程和数据库基本连接，供 Railway health check 使用。
+
+所有项目端点都必须由 Firebase Admin SDK 验证 HttpOnly Session Cookie，再根据得到的 Firebase `uid` 校验 `project.user_id`，不能信任客户端传入的 user id 或仅在浏览器端验证。
+
+## 10. 沙箱生命周期与恢复
+
+- 创建项目首次运行时启动沙箱。
+- 活跃编辑期间续租沙箱。
+- 空闲一段时间后允许沙箱停止以控制成本。
+- 恢复时：创建新沙箱 → 从最新 Snapshot/数据库恢复文件 → 安装依赖 → 启动 Vite → 更新 Preview URL。
+- 浏览器刷新只重新连接 SSE 和读取项目状态，不创建重复 Run。
+- Worker 崩溃后将长期无心跳的 Run 标记为失败，保留已经同步的文件并允许用户手动重试；Demo 不自动重跑，避免旧沙箱任务仍在运行时产生重复写入。
+
+## 11. 安全与费用控制
+
+- 绝不在主应用进程或宿主机执行生成代码。
+- E2B 沙箱不注入 OpenAI、Supabase service role 或应用内部密钥。
+- 沙箱出站网络第一版只允许 npm registry 和必要运行目标；至少记录所有外部请求。
+- 限制单次 Run 的模型 token、工具调用次数、命令执行时间和总运行时间。
+- 限制文件数量、单文件大小、项目总大小和日志大小。
+- 禁止路径逃逸、符号链接逃逸和读取沙箱系统敏感目录。
+- HTML Preview 使用独立 origin，避免生成代码读取主站 cookie/localStorage。
+- 用户 Prompt、生成代码和日志按敏感数据处理；生产环境日志中不记录完整代码或密钥。
+- 每位 Demo 用户设置每日 Run 上限和并发上限。
+- 对模型调用和沙箱分钟数分别记录用量，为未来 Credit 计费预留接口，但 Demo 不实现收费。
+
+## 12. 建议的仓库结构
+
+```text
+apps/
+  web/                         # Next.js UI + API
+  worker/                      # PostgreSQL polling Agent worker
+packages/
+  agent/                       # prompts, schemas, agent loop, tools
+  db/                          # Drizzle schema and migrations
+  sandbox/                     # E2B adapter and lifecycle
+  shared/                      # event types, API contracts, validation
+templates/
+  react-vite/                  # 可生成应用的固定起始模板
+```
+
+Web 和 Worker 共用 `packages/shared` 中的 Zod schema，确保数据库事件、SSE payload 和 UI 类型一致。
+
+## 13. 详细实施步骤
+
+下面的步骤按依赖顺序排列。完成一组并通过验收后，再进入下一组。
+
+当前进度：
+
+- [x] Step 0：准备第三方服务
+- [x] Step 1：初始化 Monorepo
+- [x] Step 2：建立 Supabase 数据层
+- [x] Step 3：实现 Firebase 登录和后端 Session
+- [x] Step 4：首页和 Project 创建闭环
+- [x] Step 5：搭建静态工作区 UI
+- [x] Step 5.5：展示 Project 列表和 Agent 聊天记录
+- [x] Step 6：用 PostgreSQL 实现任务队列和可靠 SSE
+- [x] Step 7：接入 OpenAI 规划
+- [x] Step 8：实现 E2B Sandbox Adapter
+- [x] Step 9：实现受控 Agent 编码循环
+- [x] Step 10：构建验证、自动修复和实时 Preview
+- [x] Step 11：完成首个 Run、Snapshot 和下载
+- [x] Step 12：恢复、继续聊天和手动编辑代码
+- [x] Step 13：错误、限流和可观测性
+- [x] Step 14：发布前测试和部署配置
+- [ ] Step 15：提交 GitHub 并发布公开 URL
+
+### Step 0：准备第三方服务 ✅ 已完成
+
+1. 确认本机已安装受支持的 Node.js LTS；pnpm 可在 Step 1 通过 Corepack 启用，不要求预先全局安装。
+2. 在 OpenAI Platform 创建 Project 和 API key，并为该 Project 设置月度费用上限。
+3. 在 Supabase 创建项目，记录 Project URL、service role key、数据库直连 URL 和 transaction pooler URL。
+4. 在 Supabase Storage 创建私有 bucket：`project-snapshots`。
+5. 在 Firebase Console 创建 Web App，开启 Authentication。
+6. 在 Firebase Authentication 中启用 Google 和 Email/Password provider，并把 `localhost` 及后续部署域名加入 Authorized domains。
+7. 在 Firebase 项目设置中创建 Admin SDK service account，记录 project id、client email 和 private key。
+8. 在 E2B 创建 API key；`E2B_TEMPLATE_ID` 可以留空，Demo 使用默认 base template。
+9. 生成 32-byte 随机应用密钥，例如运行 `openssl rand -hex 32`，把结果填入 `APP_ENCRYPTION_KEY`；最终值必须是 64 位十六进制且不能提交 Git。
+10. 将上述值填入仓库根目录 `.env`；密钥变量只允许服务端和 Worker 读取。
+
+验收：Node.js 可执行；`.env` 中所有必需变量都不是占位符且格式有效；可以分别执行一次 OpenAI 请求、Supabase SQL/Storage bucket 查询、Firebase token 验证和 E2B sandbox 创建/销毁测试。账号控制台中 Google、Email/Password 和 `localhost` 授权域名均已开启。
+
+#### 完成总结
+
+- OpenAI、Supabase、Firebase 和 E2B 账号及所需控制台配置已由用户确认完成。
+- `.env` 中所有必需配置均已填写；`APP_ENCRYPTION_KEY` 已验证为有效的 64 位十六进制值。
+- Firebase 已准备 Web SDK 和 Admin SDK 配置，并启用 Google、Email/Password 与 localhost 授权域名。
+- Supabase 已准备数据库连接、service role 和私有 `project-snapshots` Storage bucket。
+- E2B API key 已配置；`E2B_TEMPLATE_ID` 留空，Demo 将使用默认 base template。
+- 本机已具备 Node.js 和 OpenSSL；pnpm 在 Step 1 完成安装。
+- 真实密钥只保存在被 `.gitignore` 排除的 `.env`，公开仓库仅保留 `.env.example`。
+
+### Step 1：初始化 Monorepo ✅ 已完成
+
+1. 运行 `corepack enable` 并固定 pnpm 版本；若系统未提供 Corepack，再安装指定版本的 pnpm。
+2. 创建根 `package.json`，设置 `packageManager`、workspace scripts 和 Node 版本要求。
+3. 创建 `pnpm-workspace.yaml`，包含 `apps/*`、`packages/*` 和 `templates/*`。
+4. 创建 `apps/web`，使用 Next.js App Router、TypeScript、Tailwind 和 ESLint。
+5. 创建 `apps/worker`，使用 Node.js + TypeScript，并提供独立的 `dev` 和 `start` 入口。
+6. 创建 `packages/shared`、`packages/db`、`packages/agent` 和 `packages/sandbox`。
+7. 安装并统一配置 TypeScript、ESLint、Prettier、Vitest 和 Zod。
+8. 在 `packages/shared/src/env.ts` 用 Zod 分别定义 web server、browser public config 和 worker 环境变量，启动时缺失变量立即报错。
+9. 创建 `templates/react-vite` 固定模板，确保模板单独执行 `pnpm install && pnpm build` 成功。
+
+验收：Web 和 Worker 入口都能编译，Worker 在未完成 migration 前可以通过显式 `WORKER_DISABLED=true` 暂停轮询；`pnpm lint`、`pnpm typecheck`、`pnpm test` 全部成功。Step 2 完成后再验收完整 `pnpm dev`。
+
+#### 完成总结
+
+- 已创建 pnpm Monorepo，包含 `apps/web`、`apps/worker`、`packages/shared`、`packages/db`、`packages/agent`、`packages/sandbox` 和 `templates/react-vite`。
+- 已固定 pnpm `10.15.0`，Node engine 固定为 Node 24 LTS（`>=24 <25`），并通过 `.nvmrc` 和 `.node-version` 统一本地版本。
+- Web 已使用 Next.js App Router、React、TypeScript、Tailwind CSS，并提供英文占位首页和 `/api/health`。
+- Worker 已具备独立的开发、构建和启动入口，并支持 `WORKER_DISABLED=true`。
+- 已创建固定 React/Vite 生成模板，模板可单独开发和生产构建。
+- 已用 Zod 建立 Browser、Server 和 Worker 三类环境变量 schema，以及初始 Run Event schema。
+- 已添加 5 个测试文件、8 个测试用例，覆盖环境变量、事件、Worker 模式、Web 首页和 Vite 模板。
+- `pnpm lint`、`pnpm typecheck`、`pnpm test`、`pnpm build` 和 `pnpm format:check` 已全部通过。
+- Next.js 生产构建固定使用 Webpack，避免受限执行环境中的 Turbopack 端口绑定问题。
+- App 用户界面和页面语言元数据已经统一为英文；实施计划继续使用中文。
+
+### Step 2：建立 Supabase 数据层 ✅ 已完成
+
+1. 在 `packages/db` 初始化 Drizzle PostgreSQL client。
+2. 开发和 migration 命令使用 `DATABASE_URL_DIRECT`，Web/Worker 运行时使用 pooler `DATABASE_URL`。
+3. 按第 6 节创建 `users`、`projects`、`conversations`、`messages`、`runs`、`run_events`、`project_files` 和 `snapshots` schema；`runs` 从第一版 migration 起就包含 `worker_id`、`heartbeat_at`、`attempt_count` 和 `available_at`。
+4. 给 `projects.user_id`、`messages.conversation_id`、`runs.project_id`、`runs(status,available_at,created_at)`、`run_events(run_id,id)` 和 `project_files(project_id,path)` 建索引。
+5. 对 `project_files(project_id,path)` 建唯一约束；用 transaction 保证文件版本递增。
+6. 处理 `projects.latest_snapshot_id` 与 `snapshots.project_id` 的循环外键：先创建两张表，再用后续 `ALTER TABLE` 增加 `latest_snapshot_id` 外键。
+7. 创建 migration 并应用到 Supabase。
+8. 封装 repository 层；Route Handler 和 Agent 不直接散落 SQL。
+9. 用 Supabase service role 初始化 Storage server client，只允许后端上传/签名下载 Snapshot。
+
+验收：repository 集成测试能创建用户/项目/消息/Run，追加事件，upsert 文件并上传/下载一个测试 ZIP。
+
+#### 完成总结
+
+- 已接入 Drizzle ORM、Postgres.js 和 Supabase JavaScript client，并建立独立的数据库与 Storage 管理入口。
+- 已创建并实际应用初始 migration，包含 `users`、`projects`、`conversations`、`messages`、`runs`、`run_events`、`project_files` 和 `snapshots` 八张表。
+- 已创建 Project、Message、Run、File 更新者等 PostgreSQL enums，以及队列认领、事件续传、项目文件和 Snapshot 所需索引。
+- 已建立完整外键和级联规则；Message/Run 循环引用使用 deferred constraints，Project/Snapshot 循环引用在建表后追加。
+- `project_files` 使用 `(project_id, path)` 复合主键，并在每次 upsert 时以 transaction-safe SQL 自动递增版本和更新 SHA-256 hash。
+- 已实现用户 upsert、原子创建 Project/Conversation/Message/Run、追加及分页读取事件、文件 upsert、Snapshot 创建和项目清理 repositories。
+- 实际运行使用 Supabase Shared Transaction Pooler `DATABASE_URL`，关闭 prepared statements；`DATABASE_URL_DIRECT` 保留给支持 IPv6 的管理场景。
+- 已确认 `project-snapshots` bucket 存在且保持 private，并验证上传、下载和测试对象清理。
+- 已添加数据库 schema 单元测试与真实 Supabase 集成测试；集成测试会创建唯一测试数据并在结束后自动清理。
+- `pnpm --filter @atom-replica/db test:integration` 已通过：1 个测试文件、2 个真实集成测试全部成功，耗时约 13.75 秒。
+- 全项目 lint、typecheck、unit tests、build 和 format check 在 Step 2 实现后均已通过。
+
+### Step 3：实现 Firebase 登录和后端 Session ✅ 已完成
+
+1. 在 `apps/web/src/lib/firebase/client.ts` 使用 `NEXT_PUBLIC_FIREBASE_*` 初始化 Firebase Client SDK。
+2. 在 `apps/web/src/lib/firebase/admin.ts` 使用服务端变量初始化 Firebase Admin SDK；处理 `.env` private key 中的 `\\n`。
+3. 实现 `/login`，提供 Google popup/redirect 和邮箱密码登录。
+4. 登录成功后取得 Firebase ID Token，并 POST 到 `/api/auth/session`。
+5. `/api/auth/session` 用 Admin SDK 验证 ID Token 和足够新的 `auth_time`，然后创建短期 HttpOnly、SameSite=Lax Session Cookie；生产环境设置 `Secure=true`，localhost 开发环境设置 `Secure=false`。
+6. 实现 `/api/auth/logout` 清 Cookie；需要时调用 `revokeRefreshTokens`。
+7. 实现 `requireUser()`：验证 Session Cookie，返回 `uid/email`，并 upsert Supabase `users`。
+8. 在 Middleware 中只做“是否存在 Cookie”的快速跳转；真正授权必须在每个服务端 API 内通过 Admin SDK 完成。
+9. 所有 Project repository 查询同时携带 `userId`，防止 IDOR 越权。
+
+验收：未登录用户不能进入受保护的 `/projects` 页面；有效 Firebase ID Token 可以换取安全的 HttpOnly Session Cookie；服务端会再次验证 Session 并同步 Firebase uid 到 Supabase。Project IDOR 的真实 API 集成测试在 Step 4 创建 Project API 后完成。
+
+#### 完成总结
+
+- 已接入 Firebase Web SDK 和 Firebase Admin SDK，且 Web/Admin 配置已验证为同一个 Firebase Project。
+- 已实现纯英文 `/login` 页面，支持 Google popup、邮箱密码登录和邮箱密码注册。
+- 登录成功后，客户端只把 Firebase ID Token 发送到 `/api/auth/session`；服务端验证 token、revocation 和最近五分钟内的 `auth_time` 后签发五天有效的 HttpOnly Session Cookie。
+- Session Cookie 在生产环境使用 `Secure`，本地 localhost 自动关闭 `Secure`，并统一设置 `SameSite=Lax` 和根路径。
+- 已实现 `/api/auth/logout`，退出时撤销 Firebase refresh tokens、清除服务端 Cookie，并清理客户端 Firebase 状态。
+- 已实现 `requireUser()`：服务端验证 Session Cookie 后将 Firebase uid/email upsert 到 Supabase `users`，不信任客户端提供的 user id。
+- 已使用 Next.js 16 `proxy.ts` 对 `/projects/:path*` 做快速 Cookie 存在性保护；`/projects` 服务端页面仍执行真实 Session 验证。
+- 已实现安全的 `next` 路径处理，拒绝 `//host` 和外部 URL，避免登录后的 open redirect。
+- 已提供 `/projects` 英文认证占位页、当前用户邮箱和 Sign out 操作；Project 创建在 Step 4 接入。
+- 已新增 Firebase 配置、Session 创建/过期、Cookie 属性、refresh token 撤销、安全跳转和 resource owner helper 测试。
+- Web 认证测试共 5 个测试文件、10 个测试全部通过；全项目 typecheck、lint、production build 和 format check 均已通过。
+- Firebase Web/Admin 必需环境变量完整，Project ID 一致性检查通过。
+- 已由用户在浏览器中完成真实 Firebase 手动验收：受保护路由跳转、邮箱注册/登录、Google 登录、HttpOnly Session Cookie、Firebase 用户创建、Supabase `users` 同步和登出流程均确认有效。
+- 已为登录提交和 Next.js 路由切换加入统一的全屏 Loading overlay；登录后的服务端 Session/Supabase 同步期间会显示旋转进度和明确文案，避免短暂的 Rendering 状态被误认为页面故障。
+
+### Step 4：首页和 Project 创建闭环 ✅ 已完成
+
+1. 创建 `/` 首页，包含产品说明、示例 Prompt 和主输入框。
+2. 未登录时输入内容后触发登录，并在登录后恢复未提交 Prompt。
+3. 实现 `POST /api/projects`：校验 Prompt、创建 Project/Conversation/User Message/queued Run。
+4. 给 Project 生成简短默认名称；第一版可由 Prompt 截断得到，不额外消耗 LLM。
+5. `runs` 记录以 `queued` 状态提交到数据库后即代表入队；不再调用额外的队列服务。
+6. 返回 `projectId/runId` 并跳转 `/projects/:projectId?run=:runId`。
+
+#### 完成总结
+
+- 已实现首页 Prompt 输入、Project 创建和登录后 Prompt 恢复流程。
+- 已实现 `POST /api/projects`，使用现有数据库 transaction 创建 Project、Conversation、Message、Run 和 `run.queued` 事件。
+- 已实现项目名称生成、认证校验和按用户过滤的 Project 查询。
+- 已实现受保护的 `/projects/:projectId` 项目入口页。
+- 已添加 Step 4 API、项目名称和首页恢复 Prompt 测试。
+
+7. 对 Prompt 长度、创建频率和每用户活跃 Run 数设置限制。
+
+验收：登录用户输入 idea 后只创建一次项目和一次队列任务，并进入正确工作区。
+
+### Step 5：搭建静态工作区 UI ✅ 已完成
+
+1. 创建 `/projects/[projectId]/page.tsx`，服务端先验证所有权并读取基础数据。
+2. 创建三栏可调整布局：`ChatPanel`、`FileExplorer`、`WorkspacePanel`。
+3. `ChatPanel` 显示 User Message、Assistant Message、Plan Card、Tool Activity、错误和运行状态。
+4. `FileExplorer` 使用路径列表构造目录树，支持展开、选择和修改中状态。
+5. `WorkspacePanel` 提供 Preview/Editor tabs。
+6. Monaco 按文件扩展名设置语言，支持只读加载、脏状态、保存快捷键和冲突提示。
+7. Preview 未就绪时显示生成进度；就绪后加载 iframe。
+8. 加入桌面优先响应式行为：窄屏下三栏变成 tabs，不要求实现复杂移动端体验。
+9. 先用 fixture events 和 fixture files 完成所有 UI 状态。
+
+验收：无需接 AI 即可演示 queued、planning、coding、failed、completed 状态和文件/预览切换。
+
+#### 完成总结
+
+- 已将项目占位页替换为静态工作区布局，包含 Activity/Chat、文件树和 Preview/Editor 切换。
+- 已加入 Queued 状态、实施计划、文件选择、编辑器本地编辑和继续聊天输入框。
+- 当前 Preview、聊天提交和编辑保存仍为本地静态交互；真实 Worker、SSE、文件 API 和 Preview 将在后续步骤接入。
+- 已添加 Step 4/5 测试；全项目测试、typecheck、lint 和 format check 均通过。
+
+### Step 5.5：展示 Project 列表和 Agent 聊天记录 ✅ 已完成
+
+1. `/projects` 页面读取当前用户创建过的 Project，按最近更新时间倒序展示。
+2. Project 卡片显示名称、状态、最近更新时间和最近一次 Run 状态；点击后进入对应工作区。
+3. Project 列表只允许读取当前 Firebase 用户自己的 Project，服务端必须按 `user_id` 过滤。
+4. 工作区加载当前 Project 的历史 Conversation 和 Messages，按时间顺序显示 User Message、Assistant Message 和系统事件。
+5. 刷新页面或重新进入 Project 后，聊天记录保持完整，不依赖浏览器本地状态。
+6. 为 Project 列表、空状态、权限隔离和聊天记录加载添加测试。
+7. 提供删除 Project 的操作：删除前二次确认，服务端验证资源归属后级联删除 Project 及其 Conversation、Message、Run 和事件。
+
+验收：用户登录后可以看到自己创建过的所有 Project；进入任意 Project 可以看到此前与 Agent 的完整聊天记录，其他用户的数据不可见。
+
+#### 完成总结
+
+- 已实现 `/projects` Project 列表，按最近更新时间排序并显示 Project 状态、最近更新时间和最近一次 Run 状态。
+- 已通过服务端 `user_id` 过滤 Project 和 Message 查询，保留资源归属校验。
+- 已让工作区从数据库加载当前 Project 的历史 Conversation Messages，刷新或重新进入后仍可显示。
+- 已在 Project 卡片加入删除操作，删除前确认并通过受保护的 `DELETE /api/projects/:projectId` 执行级联删除。
+- 已在工作区顶部加入 Dashboard 入口，并在 Dashboard 加入 Create new project 按钮。
+- 已添加 Project 列表空状态、Project 链接、最近 Run 状态和历史聊天记录测试。
+- 全项目测试、typecheck、lint 和 format check 均通过。
+
+### Step 6：用 PostgreSQL 实现任务队列和可靠 SSE ✅ 已完成
+
+1. 在 `packages/shared` 定义所有 Run Event 的 Zod discriminated union。
+2. Worker 每隔 `WORKER_POLL_INTERVAL_MS` 开启短 transaction，使用 `FOR UPDATE SKIP LOCKED` 取得一条可运行任务，更新为 `planning` 后提交，再执行耗时工作；绝不在整个 AI Run 期间持有数据库 transaction。
+3. Demo 设置 `WORKER_CONCURRENCY=1`，天然保证同一 Project 不会并发修改。Worker 每隔数秒更新 heartbeat。
+4. Worker 的每个阶段先在 `run_events` 写入事件；PostgreSQL 是事件的唯一事实来源。
+5. 实现 `GET /api/runs/:id/events`，先校验 Run 所属 Project 的用户权限。
+6. SSE 连接根据 `Last-Event-ID` 查询 PostgreSQL，每隔 `SSE_POLL_INTERVAL_MS` 查询更大的 event id，并按顺序推送新增事件。
+7. 即使没有新事件也定期发送 SSE heartbeat，避免代理关闭连接；Run 进入终态后发送最后事件并关闭流。
+8. UI event reducer 必须幂等，重复收到同一 `eventId` 不重复追加。
+9. 页面初次加载先请求当前 Project/Run 状态，再连接 SSE；断线后指数退避重连。
+10. 定时恢复逻辑把 heartbeat 超时的 Run 标记为 `failed` 并清除 Project 上失效的沙箱信息，由用户显式点击重试创建新 Run。
+
+验收：Worker 能认领且不会重复执行同一个 Run；持续写入模拟事件时 UI 在约 0.5–1 秒内更新；断网再连接不会丢事件或重复显示事件。
+
+#### 完成总结
+
+- 已补充完整的 Run Event discriminated union，覆盖规划、步骤、助手输出、文件、命令、Preview、失败和完成事件。
+- 已用 PostgreSQL transaction + `FOR UPDATE SKIP LOCKED` 实现 queued Run 认领，并更新 Worker、Project 状态和 heartbeat。
+- 已实现占位 Worker polling loop、终态处理和 heartbeat 超时恢复；真实 OpenAI/E2B Agent 仍由 Step 7–10 接入。
+- 已实现带用户资源校验的 `GET /api/runs/:runId/events`，支持 `Last-Event-ID` 补发、顺序推送、SSE heartbeat 和终态关闭。
+- 工作区已接入 EventSource，支持实时状态更新和基于 event id 的幂等显示。
+- 已添加 Event schema、Worker、SSE API 测试；依赖恢复后全项目测试、typecheck、lint 和 format check 均通过。
+
+### Step 7：接入 OpenAI 规划 ✅ 已完成
+
+1. 在 `packages/agent` 创建 OpenAI client，只从 Worker 环境读取 `OPENAI_API_KEY`。
+2. 定义 `PlanSchema` 和对应 Structured Output schema。
+3. 编写 Planner system prompt：只规划固定 React/Vite/Tailwind 前端应用，不承诺真实生产后端。
+4. 组合用户初始 Prompt、项目上下文和限制，调用 Responses API。
+5. 流式的用户可见文本写成 `assistant.delta`；不要展示隐藏推理内容。
+6. 验证计划 JSON；失败时重试一次，仍失败则以 `PLAN_INVALID` 结束。
+7. 保存 `runs.plan_json`，发送 `plan.created` 和 step events。
+8. 第一版计划生成后自动进入 coding，不等待用户确认。
+
+验收：任意合理 App idea 都产生符合 schema 的短计划，数据库和 UI 显示内容一致。
+
+#### 完成总结
+
+- 已在 `packages/agent` 实现 Planner，调用 OpenAI Responses API 的 `text.format.json_schema` 结构化输出。
+- 已定义严格的 Implementation Plan schema，包含 summary、assumptions、steps 和 acceptanceCriteria。
+- 已实现无效结构重试一次、OpenAI 请求失败和 `PLAN_INVALID` 错误分类。
+- Worker 已读取触发消息，调用 Planner，保存 `runs.plan_json`，并发布 `plan.created` 与 `assistant.delta` 事件。
+- 工作区会根据真实 `plan.created` 事件更新 Implementation Plan，而不是只显示静态 fixture。
+- Planner 已兼容 Responses API 原始 HTTP 响应中的 `output[].content[].text`，不只依赖 SDK 的 `output_text` 便捷字段。
+- 已添加 Planner 成功、结构化输出重试和 OpenAI 错误测试；全项目测试、typecheck、lint 和 format check 均通过。
+
+### Step 8：实现 E2B Sandbox Adapter ✅ 已完成
+
+1. 在 `packages/sandbox` 定义与厂商无关的 `SandboxAdapter` interface。
+2. 实现 E2B adapter：create、connect、writeFile、readFile、listFiles、runCommand、startDevServer、getPreviewUrl、kill。
+3. 创建沙箱后把 `templates/react-vite` 复制进去，工作目录统一固定为 `/home/user/app`。
+4. 在数据库记录 `sandbox_id` 和过期时间，但不把沙箱当持久化来源。
+5. 所有文件路径先转换为 POSIX 相对路径，拒绝绝对路径、`..`、符号链接逃逸和工作目录外访问。
+6. 命令执行设置超时和最大输出；将 stdout/stderr 截断后再交给模型。
+7. Preview 使用固定端口 `5173`；启动后轮询健康检查并返回临时 HTTPS URL。
+8. Run 结束后短期保留沙箱供继续修改，超过空闲 TTL 后销毁。
+
+部署构建必须把 `templates/react-vite` 一并打包进 Worker artifact；不要依赖只存在于开发机的相对路径。
+
+验收：测试代码能在沙箱写入模板、构建、启动，并从外部访问 Preview URL；沙箱不能读取主应用环境变量。
+
+#### 完成总结
+
+- 已在 `packages/sandbox` 扩展厂商无关的 `SandboxAdapter`，覆盖 create、connect、writeFile、readFile、listFiles、runCommand、startDevServer、getPreviewUrl 和 kill。
+- 已实现 `E2BSandboxAdapter`，使用官方 E2B JavaScript SDK 的 Sandbox client 能力面；`e2b` 已加入 `packages/sandbox` 依赖，SDK client 通过依赖注入，便于 Worker 在运行时绑定具体 SDK 版本，也便于测试隔离。
+- 新沙箱固定使用 `/home/user/app`，创建时复制 `templates/react-vite`；复制过程排除 `node_modules`、`dist`、`.git`、`.env*`，并拒绝模板符号链接。
+- 所有文件路径统一转换为 POSIX 相对路径，拒绝绝对路径、反斜杠、`..` 穿越和空路径；命令执行固定工作目录并带超时及最大输出截断。
+- 已实现固定端口（默认 `5173`）的 Vite 后台启动、E2B host URL 获取和 HTTP 健康轮询。
+- 已新增 4 个 sandbox 测试，覆盖路径安全、模板复制、文件/命令映射、输出截断、后台 Preview 启动和健康检查；Step 8 测试共 8 个断言通过。
+- `pnpm typecheck`、`pnpm test`、`pnpm lint` 和 `pnpm format:check` 均已通过。
+- `e2b` SDK 已成功安装，且 `Sandbox.create` 可正常加载；已尝试使用 `.env` 中的 `E2B_API_KEY` 执行真实云端 smoke test，但当前受限环境访问 E2B API 时返回 `fetch failed`，因此真实沙箱构建/Preview 验证需要在可访问 E2B API 的网络环境中重跑。
+
+### Step 9：实现受控 Agent 编码循环 ✅ 已完成
+
+1. 定义第 7 节的工具 JSON schema，并把工具 handler 映射到 Sandbox Adapter。
+2. 给 Agent system prompt 明确模板技术栈、目录、设计要求、禁止项和验收标准。
+3. 初始生成时给模型文件树和关键模板文件；修改时额外给最近对话、当前计划和相关文件。
+4. Agent 每次只通过工具读写文件；每个 tool call 前后发送 `tool.started/tool.completed`。
+5. `write_file/apply_patch/delete_file` 成功后计算 hash，写入 `project_files` 并发送对应文件事件。
+6. 对每个 Run 限制最大模型轮次、工具调用数、累计 token 和总时长。
+7. 模型调用或工具调用发生可重试错误时使用有限指数退避；业务/权限错误不重试。
+8. Agent 调用 `finish` 后进入验证阶段，不能直接把 Run 标记 completed。
+
+验收：Prompt 能使 Agent 从固定模板生成至少三个不同类型的简单应用，且所有写入都能在事件流和数据库中追踪。
+
+#### 完成总结
+
+- 已在 `packages/agent` 实现受控 Coder loop，并定义 `read_file`、`write_file`、`apply_patch`、`delete_file`、`list_files`、`run_command` 和 `finish` 工具 schema。
+- 所有文件和命令操作都只能通过注入的 sandbox 执行；`apply_patch` 要求目标文本恰好匹配一次，路径安全由 sandbox adapter 统一负责。
+- 每个工具调用都会产生 `tool.started` / `tool.completed` 边界事件；文件变更、删除、命令输出和助手文本也会通过事件回调暴露给 Worker。
+- 已加入最大模型轮次、工具调用数、累计 token、总时长和命令超时限制；模型请求对可重试错误使用一次短退避重试，工具/业务错误会作为工具结果返回给模型，不会静默完成 Run。
+- `finish` 只返回编码总结，Worker 会将 Run 从 coding 转为 validating，不会直接标记 completed；新增 `run.coding`、`run.validating`、`tool.completed` 和 `file.deleted` 事件类型。
+- Worker 已完成真实 Coder 接入：每个 Run 在规划后创建 E2B sandbox，绑定 Coder，持久化工具/文件/命令事件，并将 Agent 文件变更同步到 `project_files`；编码结束后进入 validating。Agent Coder 测试覆盖工具链、事件边界、工具调用上限和错误恢复。
+- Step 9 新增 Agent 10 个测试，Worker 4 个测试；全项目 `typecheck`、`test`、`lint` 和 `format:check` 均已通过。
+
+### Step 10：构建验证、自动修复和实时 Preview ✅ 已完成
+
+1. 执行 `pnpm install --frozen-lockfile=false`，限制安装时长。
+2. 执行 `pnpm build`，保存精简日志并发送 command events。
+3. 构建失败时提取错误、相关文件和最后一次修改交回 Agent 修复。
+4. 最多执行 `MAX_AGENT_REPAIR_ATTEMPTS` 次修复；超过上限发送 `run.failed`。
+5. 构建成功后启动 Vite dev server，轮询端口和 HTTP 200。
+6. 保存 Preview URL 并发送 `preview.ready`。
+7. iframe 使用独立 origin 和 `sandbox="allow-scripts allow-forms allow-modals allow-popups"`；除非确有需要，不加 `allow-same-origin`。
+8. 后续 Agent 写文件时依赖 Vite HMR；HMR 失败则显示 Restart 按钮并调用 runtime restart API。
+
+验收：正常项目自动出现可交互 Preview；故意制造 TypeScript 错误时 Agent 能修复或在两次后清晰失败。
+
+#### 完成总结
+
+- Worker 已在 Coder 完成后执行带超时的 `pnpm install --frozen-lockfile=false` 和 `pnpm build`，并将截断后的 stdout/stderr 持久化为 `command.output` 事件。
+- 构建失败会发布带尝试次数的 `validation.failed`，并把精简后的错误日志作为 `recentContext` 交回同一 Sandbox 中的 Coder；修复次数由 `MAX_AGENT_REPAIR_ATTEMPTS` 控制，耗尽后以 `VALIDATION_FAILED` 结束 Run。
+- 构建成功后会启动 Vite、轮询 Preview HTTP 健康状态、把 URL 保存到 Project，并依次发布 `preview.ready` 和完成事件；依赖安装与 Preview 启动失败分别使用明确错误码。
+- 工作区已监听 coding、validating、command、validation 和 Preview SSE 事件；Preview URL 可在刷新后从数据库恢复，并通过不含 `allow-same-origin` 的受限 iframe 展示。
+- 已实现受 Project 所有权保护的 `POST /api/projects/:projectId/runtime/restart`；Restart 会连接现有 E2B Sandbox、重启固定端口的 Vite、再次执行健康检查并保存新 URL。
+- 已把 `MAX_AGENT_TURNS`、`MAX_AGENT_TOOL_CALLS` 和 `MAX_AGENT_REPAIR_ATTEMPTS` 纳入 Worker 环境变量校验，并在 Worker 创建 Coder/验证器时应用这些限制。
+- 新增 Worker 构建成功、一次自动修复成功、修复次数耗尽测试，以及 Preview iframe、Restart API、Sandbox Restart 和事件 schema 测试；全项目 `typecheck`、`test`、`lint`、`format:check` 和生产 `build` 均已通过。
+- 当前受限执行环境无法访问 E2B 云端，因此真实 E2B Preview 端到端 smoke test 尚未在本环境执行；Adapter、Worker 和 API 行为已通过隔离测试覆盖。
+
+### Step 11：完成首个 Run、Snapshot 和下载 ✅ 已完成
+
+1. Run 验证成功后在沙箱中创建源码 ZIP，排除 `node_modules`、`.git`、缓存和任何 `.env`。
+2. 上传到 Supabase 私有 `project-snapshots` bucket。
+3. 写入 `snapshots` 并更新 `projects.latest_snapshot_id`。
+4. 保存 Assistant 最终总结，将 Run 更新为 `completed`、Project 更新为 `running`，最后写入 `run.completed` 事件；数据库写入顺序保证客户端收到完成事件时快照已经可下载。
+5. `GET /download` 验证权限后，优先从当前 `project_files` 动态生成 ZIP 并流式返回，确保手动编辑后的代码也不会下载到旧快照；Storage Snapshot 主要用于恢复和历史留档。
+6. 为 Snapshot 设置保留策略；Demo 只需保留最近若干个。
+
+验收：首个 Run 有确定的 completed 状态；下载 ZIP 不包含密钥并可在本地正常运行。
+
+#### 完成总结
+
+- Worker 在 Preview 验证成功后递归读取 Sandbox 的完整源码，将未被 Agent 修改过的模板文件也同步到 `project_files`，不再把部分文件索引误当成完整项目。
+- 已在 `packages/shared` 实现无外部依赖的标准 ZIP 归档器，Worker Snapshot 与 Web 下载共用同一套路径安全和排除规则；归档拒绝路径逃逸，并排除 `node_modules`、`dist`、`.git`、`.vite`、coverage 和所有 `.env` 文件。
+- Worker 会把源码 ZIP 上传到 Supabase 私有 `project-snapshots` bucket，随后创建 Snapshot、更新 `projects.latest_snapshot_id`，并只保留每个 Project 最近 5 个 Snapshot，清理过期 Storage 对象。
+- 已实现事务化 `finalizeRun`：在同一数据库 transaction 中保存 Assistant 最终总结、将 Run 标记为 `completed` 并将 Project 标记为 `running`；`run.completed` 只会在 Snapshot 和最终化事务都成功后发布。
+- Snapshot 上传或最终化失败会以 `SNAPSHOT_FAILED` 结束 Run，不会发布误导性的完成事件。
+- 已实现受 Firebase Session 和 Project 所有权保护的 `GET /api/projects/:projectId/download`，每次从当前 `project_files` 动态生成私有 ZIP，因此未来手动编辑后的内容也不会下载到旧 Snapshot；工作区 Download 按钮已接入该端点。
+- 已新增 ZIP 格式与敏感文件排除、Sandbox 递归枚举、Snapshot 上传与清理、最终完成事件顺序、上传失败、下载鉴权和最新文件下载测试。
+- 全项目 `typecheck`、`test`、`lint`、`format:check` 和生产 `build` 均已通过；真实 Supabase 数据库/Storage 集成测试仍需在具备外部网络且设置 `RUN_SUPABASE_INTEGRATION_TESTS=true` 的 Node 24 环境运行。
+
+### Step 12：恢复、继续聊天和手动编辑代码 ✅ 已完成
+
+1. 实现统一 `ensureSandbox(projectId)`：先尝试连接有效的 `sandbox_id`；不存在或过期时创建新沙箱。
+2. 新沙箱优先下载并解压最新 Snapshot，再用 `project_files` 覆盖快照之后的最新内容；没有 Snapshot 的异常项目则完全从 `project_files` 重建。
+3. 恢复后执行依赖安装、启动 Vite，并保存及发布新的 Preview URL。
+4. 实现 `POST /api/projects/:id/messages`，拒绝空消息；已有活跃 Run 时明确返回 409，Demo 不做多请求排队。
+5. 创建修改 Run 后，Agent 读取最近对话、当前文件树和相关文件，不在每轮发送整个仓库。
+6. 实现文件树 API 和单文件读取 API，统一验证路径和 Project 所有权。
+7. Monaco 保存调用 `PUT .../files/content`，用 `version` 做 optimistic concurrency control。
+8. 保存时先写活跃沙箱，再 transaction 更新 `project_files`；数据库更新失败时重新从数据库内容覆盖沙箱，避免两份状态长期分叉。保存成功后将现有 Snapshot 视为旧版本，但下载端点仍以 `project_files` 为准。
+9. 有活跃 Run 时禁用手动保存；有未保存的 Monaco 内容时禁止发送新的 Agent 修改请求，并提示用户保存或放弃，避免静默覆盖。
+10. 每次修改 Run 仍完整执行 Step 10 验证和 Step 11 快照/完成流程。
+
+验收：销毁沙箱后仍能恢复项目；用户可通过第二条 Prompt 改颜色或增加功能，也可在无活跃 Run 时手改组件并立即在 Preview 看到结果。
+
+#### 完成总结
+
+- 已在 `packages/sandbox` 实现统一 `ensureSandbox`：有效且可连接的 Sandbox 会直接复用；记录过期或连接失败时创建新 Sandbox，并严格按“最新 Snapshot → `project_files` 覆盖”的顺序恢复源码。
+- Snapshot ZIP 已支持安全反序列化；恢复过程会重新执行依赖安装、启动 Vite、等待 Preview HTTP 健康，并持久化新的 `sandbox_id`、过期时间和 Preview URL。Worker 恢复时还会发布新的 `preview.ready` 事件。
+- Worker 的修改 Run 会读取最近 10 条 Conversation Message、当前文件树和最新文件状态，将最近对话作为上下文交给 Planner/Coder，同时仍完整执行规划、编码、Step 10 验证和 Step 11 Snapshot/完成流程。
+- 已实现 `POST /api/projects/:projectId/messages`，拒绝空消息；创建 Message/Run/event 时在 Project 行锁下检查 `queued/planning/coding/validating` Run，已有活跃 Run 时返回 409，避免并发修改同一项目。
+- 已实现带 Project 所有权和安全路径校验的文件树、文件内容读取及保存 API；文件内容响应包含 `version`，保存使用 optimistic concurrency control，版本过期时返回 409 和数据库最新内容。
+- 手动保存会先确保或恢复 Sandbox、写入运行时文件，再按 version 条件更新 `project_files`；数据库写入失败或竞争冲突时会把 Sandbox 文件回滚为数据库内容，避免两份状态长期分叉。
+- 工作区已从真实文件 API 加载文件树和内容，支持 Save/Discard、版本显示和冲突提示；活跃 Agent Run 时禁用保存，存在未保存内容时禁用新 Prompt 并提示先保存或放弃，避免 Agent 静默覆盖用户编辑。
+- 工作区继续聊天已接入真实 Message API 和新 Run SSE；收到文件事件或 Run 完成事件后刷新文件树，重新进入 Project 时会加载最新 Run、历史消息、文件和 Preview 状态。Restart 也已改为通过统一恢复流程重建被销毁的 Sandbox。
+- 已新增 Snapshot ZIP 读取、Sandbox 复用与恢复覆盖、继续消息创建/空消息/并发 409、活跃 Run 保存限制、version 冲突、Sandbox 回滚和 Restart 恢复测试。
+- 全项目 `typecheck`、`test`、`lint`、`format:check` 和生产 `build` 均已通过；当前工作区继续使用既有轻量代码编辑器，Monaco 组件依赖将在具备包安装网络时替换，保存协议和并发控制无需变化。
+
+### Step 13：错误、限流和可观测性 ✅ 已完成
+
+1. 定义稳定错误码：`AUTH_REQUIRED`、`RATE_LIMITED`、`PLAN_INVALID`、`SANDBOX_FAILED`、`BUILD_FAILED`、`RUN_TIMEOUT` 等。
+2. 所有外部 API 调用记录 provider、耗时、状态和 request id，但不记录密钥或完整代码。
+3. 使用 PostgreSQL 中的 Run/Message 时间窗口计数，按用户限制每日 Run 数、每分钟消息数和并发 Run 数；Demo 流量不需要 Redis rate limiter。
+4. 按 Run 记录 OpenAI token 估算、E2B 持续分钟和失败重试次数。
+5. 增加取消 Run：写 `cancelled` 状态；Worker 在每个模型/工具调用边界检查状态，停止后续调用并结束当前可终止的沙箱命令。
+6. 接入 Sentry（如果填写 DSN）；未配置时应用仍可运行。
+7. UI 为每类失败提供明确操作：重试、继续聊天、重启 Preview 或下载当前代码。
+
+验收：超时、额度不足、E2B 失败和构建失败都能进入确定终态，不留下永久 loading 状态。
+
+#### 完成总结
+
+- 已在 `packages/shared` 定义统一错误码和 API 错误响应格式；Web API、Worker 失败事件及数据库 Run 终态统一使用 `AUTH_REQUIRED`、`RATE_LIMITED`、`PLAN_INVALID`、`SANDBOX_FAILED`、`BUILD_FAILED`、`RUN_TIMEOUT`、`RUN_CANCELLED`、`AI_FAILED`、`SNAPSHOT_FAILED` 等稳定错误码。
+- 已使用 PostgreSQL 的 Run/Message 时间窗口统计实现用户级限流，默认限制为每日 20 个 Run、每分钟 6 条消息和 1 个并发 Run；项目创建和继续聊天均执行限制，返回 HTTP 429、`RATE_LIMITED` 和明确的 `Retry-After`。
+- OpenAI Planner/Coder、E2B Adapter 和 Supabase Storage 操作现会记录 provider、operation、耗时、成功/失败状态及可取得的 request id；日志不包含 API key、Prompt、完整代码或文件内容。
+- `runs` 已增加 `model_tokens` 和 `sandbox_duration_seconds` migration，Worker 会在成功、失败或取消后的 `finally` 中记录规划/编码/修复累计 token、E2B 使用秒数及模型/构建重试次数；模型在中途失败时已产生的用量也不会丢失。
+- 已实现受所有权保护的 `POST /api/runs/:runId/cancel`、`run.cancelled` 终态事件和 SSE 自动关闭；Worker 会在规划、模型、工具、验证、Preview 和 Snapshot 边界检查取消状态，并在 Agent 或验证命令执行期间轮询取消状态、终止可终止的 E2B Sandbox 命令。取消与失败存在竞争时不会覆盖 `cancelled` 终态或追加错误的 `run.failed`。
+- 已加入整体 Run 超时、命令超时和稳定失败分类；超时、计划无效、OpenAI、E2B、构建、Preview、Snapshot 和内部错误均进入明确终态，已有 Preview 的 Project 在新 Run 失败时仍保留可运行状态。
+- 已接入可选 Sentry envelope 上报；`SENTRY_DSN` 未配置或上报失败时 Web/Worker 继续正常运行。错误消息会截断，Context 只记录 route/run/project/error code 等安全元数据。
+- 工作区现支持运行中 Cancel；失败卡片显示稳定错误类型和说明，并按情况提供 Retry run、Continue chatting、Restart preview 和 Download code 操作；刷新后会从最新 Run 恢复失败详情。
+- 已新增限流、错误响应、Provider 日志、Sentry 可选行为、OpenAI/E2B 指标、取消 API、取消终态 SSE、活动命令中止、超时映射、用量持久化和失败恢复 UI 测试。全项目 114 个测试通过、2 个真实 Supabase 集成测试按环境开关跳过；`typecheck`、`lint`、`format:check` 和生产 `build` 均已通过。
+- `0001_run_usage.sql` migration 已生成；当前受限执行环境无法解析 Supabase Pooler DNS，因此未能从本环境应用到远端数据库。手动测试前需在可访问 Supabase 的终端执行 `pnpm --filter @atom-replica/db db:migrate`。
+
+### Step 14：发布前测试和部署配置 ✅ 已完成
+
+1. 完成第 14 节测试，重点覆盖认证越权、SSE 重连和沙箱路径安全。
+2. 用固定 Prompt 建立 smoke test：“创建一个带添加、完成和删除功能的 Todo App”。
+3. 为 Web 增加 `/api/health`，返回进程状态和一次轻量数据库查询结果，失败时使用非 2xx 状态。
+4. 配置 Next.js `output: "standalone"`，确保 Web 监听部署平台提供的 `PORT` 和 `0.0.0.0`。
+5. 为 Monorepo 明确生产命令：Web 使用 `pnpm --filter web build/start`，Worker 使用 `pnpm --filter worker build/start`。
+6. 承载 SSE 的 Route 明确使用 Node runtime，并保留 heartbeat，避免平台因长期无数据而关闭连接。
+7. 准备 Railway Web/Worker 两套变量清单；Web 不需要 E2B/OpenAI 私钥，Worker 不需要 Firebase Browser 配置，双方只获得最小必要权限。
+8. 校验 `.env`、service-account JSON、日志、测试快照和本地生成项目不会被 Git 跟踪。
+9. 本地执行完整 E2E：注册 → 创建 → 生成 → Preview → 对话修改 → 手动编辑 → 下载 → 销毁/恢复。
+
+验收：第 15 节功能标准在本地全部通过；生产构建和启动命令成功；仓库中不存在任何真实密钥。
+
+#### 完成总结
+
+- `/api/health` 现会先校验 Web 必需环境变量，再执行带 3 秒上限的轻量 PostgreSQL 查询；只有配置和数据库均就绪才返回 HTTP 200，数据库断开、超时或配置缺失均返回不泄漏内部错误的 HTTP 503，可直接作为 Railway Web health check。
+- Next.js 已保持 `output: "standalone"`，关闭 `X-Powered-By`，Web start 监听 `0.0.0.0` 并自动读取平台 `PORT`；SSE Route 明确使用 Node runtime、15 秒 heartbeat、禁止代理缓冲，支持 `Last-Event-ID` 重放，并会在客户端断开后停止数据库 polling。
+- 已新增 PostgreSQL `runtime_jobs` migration。手动文件保存和 Preview 重启不再由 Web 直接访问 E2B，而是原子写入持久任务并由 Worker 执行、heartbeat、失败终态和宕机恢复；Web 通过受所有权保护的状态 API 等待结果。同一 Project 的 Agent Run 与 Runtime Job 互斥，避免重复重启、版本竞争和费用失控。
+- Web 已彻底移除 `@atom-replica/sandbox`、`E2B_API_KEY` 和 OpenAI 依赖，也不再需要 Supabase service-role/Storage 配置；Worker 独占 OpenAI、E2B 和 Snapshot Storage 权限，且不接收 Firebase Browser/Admin 配置。两套最小变量模板位于 `deploy/web.env.example` 和 `deploy/worker.env.example`。
+- 已修复两项只会在真实生产产物中暴露的问题：所有 ESM workspace package 现从 `dist/*.js` 正确解析，Worker 在 build 后可由原生 Node 直接启动；E2B `getHost()` 返回的 hostname 现会规范化为 HTTPS Preview URL，不再产生无协议 iframe 地址。
+- 已新增 `railway.web.json` 和 `railway.worker.json`：分别使用依赖感知的 Monorepo build、独立 start command、失败重启策略；只有 Web 执行编译后的 Direct DB pre-deploy migration 和 `/api/health` 检查，Worker 不公开网络域名。完整配置契约记录在 `docs/deployment/railway.md`。
+- 已加入限制明确的 CSP（Preview 默认仅允许 `https://*.e2b.app`，可通过非敏感变量收窄）、iframe sandbox、X-Frame-Options、nosniff、Referrer/Permissions/COOP 等生产响应头，并覆盖恶意 Preview origin/header injection 测试。
+- 认证越权、Runtime Job 所有权、SSE 重连/断开、沙箱与下载路径穿越、`.env`/依赖/构建输出排除、危险命令、命令超时、大输出截断、严格 iframe 权限、数据库 health failure 和环境权限分离均已有自动化测试。
+- 已提供固定 Prompt 的环境无关 live smoke：`pnpm test:smoke` 直接针对 `E2E_BASE_URL`，通过 Firebase 登录后覆盖创建 Todo App、主动断开并恢复 SSE、Preview、继续聊天、手动编辑经 Worker 同步、重启 Preview、下载 ZIP 和清理 Project；不依赖本地 Web/Worker 进程。人工浏览器验收清单位于 `docs/testing/manual-production-smoke.md`。
+- `.gitignore` 已覆盖 `.env*`、service-account JSON、生成项目、构建、日志、Playwright/测试产物；`pnpm security:scan` 会扫描 credential-shaped 内容，并在 Step 15 初始化 Git 后额外拒绝被强制跟踪的敏感文件。
+- 最终自动化结果：136 个测试通过，2 个需要真实 Supabase 的集成测试按环境开关跳过；`typecheck`、`lint`、`format:check`、secret scan、Web production build、Worker production build、standalone 产物和 Worker 原生 Node start 均通过。当前执行器只有 Node 26，因此会显示项目要求 Node 24 的 engine warning；Railway 通过 `engines`、`.node-version` 和 `.nvmrc` 固定 Node 24。真实 Firebase/Supabase/OpenAI/E2B live smoke 需由用户按上述清单在可访问外部服务的终端执行，结果是进入 Step 15 前的人工 release gate。
+
+### Step 15：提交 GitHub 并发布公开 URL（最终一步）
+
+1. 初始化 Git 仓库（如果尚未初始化），确认默认分支为 `main`。
+2. 执行 secret scan 和 `git status`，确认 `.env`、Firebase Admin 私钥、Supabase service role key、OpenAI key 和 E2B key均未被跟踪；只提交 `.env.example` 或变量说明，不提交真实 `.env`。
+3. 创建 GitHub repository，添加 remote，提交全部 Demo 源码并推送 `main`；记录最终 commit SHA 和 GitHub repository URL。
+4. 在 Railway 创建一个 Project，通过 GitHub repository 添加两个 Service：`web` 和 `worker`。两个 Service 使用同一个仓库，但分别配置 Step 14 中的 build/start command。
+5. 只让 `web` Service 在 pre-deploy 阶段执行一次数据库 migration；Worker 不重复执行 migration，并在 migration 成功后启动轮询。Web 必须启用 Railway Outbound IPv6 才能访问默认 IPv6-only 的 Supabase Direct DB；运行流量继续使用 IPv4 Pooler。
+6. 在 Railway Variables 中录入真实环境变量，不从 GitHub 仓库或 `.env` 文件导入密钥。`DATABASE_URL` 使用 Supabase pooler，migration 使用 direct URL。
+7. 为 Web Service 配置 `/api/health` health check，并在 Networking → Public Networking 生成 Railway HTTPS domain；Worker 不生成公共 domain。
+8. 将生成的 `https://<service>.up.railway.app` 写入 Web Service 的 `NEXT_PUBLIC_APP_URL`，重新部署 Web。
+9. 把 Railway 域名加入 Firebase Authentication Authorized domains，并确认 Google/邮箱登录回调正常。
+10. 根据实际 E2B Preview host 更新 CSP `frame-src` 和 `connect-src`，但不能使用无边界的 `*`。
+11. 在公开 URL 上重新执行 smoke/E2E：登录 → 创建 Todo App → 查看实时事件 → 操作 Preview → 修改 → 下载。
+12. 检查 Railway Web/Worker logs、Supabase 数据、E2B 沙箱释放和错误页面，确认没有密钥泄漏或永久 pending Run。
+13. 将 README 补充为最终交付说明，至少包含产品截图、架构摘要、本地启动方式、所需环境变量、GitHub URL 和公开 Demo URL，然后做最后一次 commit/push。
+
+验收：`main` 分支与本地最终代码一致；GitHub repository 可访问；公开 HTTPS URL 在未登录状态可打开首页、登录后可完成完整生成闭环；最后交付同时提供 GitHub URL、public URL 和 commit SHA。Railway 官方支持从 GitHub repository 部署，并可在 Public Networking 中生成 Railway domain。
+
+## 14. 测试策略
+
+- Unit tests：路径验证、工具权限、事件 reducer、计划 schema、费用限制。
+- Integration tests：Project → Message → Queue → SSE → Run complete。
+- Sandbox integration：写文件、安装依赖、构建、启动、获取 Preview URL、恢复 Snapshot。
+- Browser E2E（Playwright）：
+  - 从首页创建 App。
+  - 看到计划和实时文件变化。
+  - Preview 可交互。
+  - 继续聊天后 Preview 更新。
+  - 编辑文件并保存。
+  - 下载 ZIP。
+- Security tests：跨用户访问、`../` 路径、危险命令、超时、大输出和恶意 iframe 行为。
+
+## 15. Demo 完成标准
+
+使用一个全新账号，用户能够：
+
+1. 在首页输入一个简单 Web App idea。
+2. 在工作区实时看到 AI 计划和编码动作。
+3. 在文件树和 Monaco 中查看生成代码。
+4. 在右侧 iframe 中操作生成的应用。
+5. 通过第二条聊天消息修改应用，并看到 Preview 自动更新。
+6. 刷新页面后恢复项目、消息、文件和最终状态。
+7. 下载一份能在本地 `pnpm install && pnpm dev` 运行的源码 ZIP。
+8. 通过公开 HTTPS URL 使用 Demo，并能访问包含最终源码的 GitHub repository。
+
+同时，生成代码只能在隔离沙箱内执行，单次 Run 受到明确的时间和成本上限约束。
+
+## 16. 暂不实现
+
+- 真正的多智能体角色协作与并行竞赛。
+- GitHub 双向同步和分支管理。
+- 面向生成应用的一键生产部署、自定义域名和高可用生产基础设施；本项目自身的 Railway Demo 部署仍属于交付范围。
+- Stripe 订阅及 Credits 计费。
+- 团队空间、分享权限和多人实时编辑。
+- 原生移动端 App 生成。
+- 任意技术栈生成；Demo 只生成固定的 React/Vite Web App。
+- 自动向生成的 App 注入第三方密钥。
+
+固定生成栈是这个 Demo 能可靠完成实时预览、错误修复和安全控制的关键边界。验证核心交互成立后，再考虑扩展 Next.js、后端服务或更多模板。

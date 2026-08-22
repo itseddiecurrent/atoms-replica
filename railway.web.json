@@ -1,0 +1,23 @@
+{
+  "$schema": "https://railway.com/railway.schema.json",
+  "build": {
+    "builder": "NIXPACKS",
+    "buildCommand": "pnpm --filter @atom-replica/web... build",
+    "watchPatterns": [
+      "/apps/web/**",
+      "/packages/db/**",
+      "/packages/shared/**",
+      "/package.json",
+      "/pnpm-lock.yaml",
+      "/pnpm-workspace.yaml"
+    ]
+  },
+  "deploy": {
+    "preDeployCommand": "pnpm --filter @atom-replica/db db:migrate:prod",
+    "startCommand": "pnpm --filter web start",
+    "healthcheckPath": "/api/health",
+    "healthcheckTimeout": 300,
+    "restartPolicyType": "ON_FAILURE",
+    "restartPolicyMaxRetries": 10
+  }
+}

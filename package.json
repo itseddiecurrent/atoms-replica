@@ -1,0 +1,36 @@
+{
+  "name": "atom-replica",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@10.15.0",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "scripts": {
+    "dev": "pnpm run dev:prepare && pnpm --parallel --filter './apps/*' dev",
+    "dev:local": "./run-local.sh",
+    "dev:prepare": "pnpm --filter './packages/*' build",
+    "build": "pnpm -r --if-present build",
+    "build:web": "pnpm --filter @atom-replica/web... build",
+    "build:worker": "pnpm --filter @atom-replica/worker... build",
+    "lint": "eslint .",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "test": "pnpm run test:security-scan && pnpm -r --if-present test",
+    "test:security-scan": "node --test scripts/secret-scan-rules.test.mjs",
+    "test:smoke": "node scripts/live-smoke.mjs",
+    "test:watch": "pnpm --parallel -r --if-present test:watch",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "security:scan": "node scripts/secret-scan.mjs"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.0",
+    "@types/node": "^24.10.0",
+    "eslint": "^9.39.0",
+    "globals": "^16.5.0",
+    "prettier": "^3.6.0",
+    "typescript": "^5.9.0",
+    "typescript-eslint": "^8.46.0",
+    "vitest": "^4.0.0"
+  }
+}
