@@ -86,7 +86,7 @@ unset VSCODE_GIT_ASKPASS_MAIN
 unset VSCODE_GIT_ASKPASS_EXTRA_ARGS
 unset VSCODE_GIT_IPC_HANDLE
 export GIT_TERMINAL_PROMPT=1
-git push -u origin main
+git -c credential.username=itseddiecurrent push -u origin main
 
 printf '\nGitHub publish completed: %s\n' "${repository_url%.git}"
 printf 'Commit: %s\n' "$(git rev-parse HEAD)"
