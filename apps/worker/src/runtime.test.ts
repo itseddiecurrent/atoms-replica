@@ -225,10 +225,10 @@ describe("processNextRun", () => {
       )
     ).resolves.toBe(true);
 
-    expect(sandbox.runCommand).toHaveBeenNthCalledWith(1, "pnpm install --frozen-lockfile=false", {
+    expect(sandbox.runCommand).toHaveBeenNthCalledWith(1, "npm install --no-audit --no-fund", {
       timeoutMs: 120_000
     });
-    expect(sandbox.runCommand).toHaveBeenNthCalledWith(2, "pnpm build", {
+    expect(sandbox.runCommand).toHaveBeenNthCalledWith(2, "npm run build", {
       timeoutMs: 120_000
     });
     expect(sandbox.startDevServer).toHaveBeenCalledWith({ port: 5173 });
@@ -242,6 +242,53 @@ describe("processNextRun", () => {
       payload: { url: "https://preview.example.com" }
     });
     expect(completeRun).toHaveBeenCalled();
+  });
+
+  it("reports a missing Sandbox package manager as BUILD_FAILED with diagnostics", async () => {
+    claimNextRun.mockResolvedValue({
+      id: "run-1",
+      projectId: "project-1",
+      triggerMessageId: "message-1"
+    });
+    getMessageContent.mockResolvedValue("Build a dashboard");
+    const coder = {
+      run: vi.fn().mockResolvedValue({ summary: "Coded", turns: 1, toolCalls: 1, totalTokens: 10 })
+    };
+    const sandbox = {
+      runCommand: vi.fn().mockResolvedValue({
+        exitCode: 127,
+        stdout: "",
+        stderr: "sh: npm: command not found"
+      }),
+      startDevServer: vi.fn(),
+      getPreviewUrl: vi.fn(),
+      kill: vi.fn()
+    };
+
+    await processNextRun(
+      "database" as never,
+      "worker-1",
+      undefined,
+      undefined,
+      vi.fn().mockResolvedValue({ coder, sandbox })
+    );
+
+    expect(appendRunEvent).toHaveBeenCalledWith("database", {
+      runId: "run-1",
+      type: "command.output",
+      payload: {
+        command: "npm install --no-audit --no-fund",
+        output: "sh: npm: command not found"
+      }
+    });
+    expect(failRun).toHaveBeenCalledWith(
+      "database",
+      expect.objectContaining({
+        code: "BUILD_FAILED",
+        message: expect.stringContaining("sh: npm: command not found")
+      })
+    );
+    expect(sandbox.startDevServer).not.toHaveBeenCalled();
   });
 
   it("gives a failed build to the coder and succeeds after one repair", async () => {
@@ -277,7 +324,7 @@ describe("processNextRun", () => {
     expect(coder.run).toHaveBeenCalledTimes(2);
     expect(coder.run).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        prompt: "Repair the project so pnpm build succeeds.",
+        prompt: "Repair the project so npm run build succeeds.",
         recentContext: expect.stringContaining("src/App.tsx: broken")
       })
     );

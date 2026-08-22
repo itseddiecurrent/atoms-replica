@@ -75,6 +75,8 @@ type CoderFactory = (run: {
 type ValidationOptions = {
   maxRepairAttempts?: number;
   previewPort?: number;
+  installCommand?: string;
+  buildCommand?: string;
   installTimeoutMs?: number;
   buildTimeoutMs?: number;
   maxRunDurationMs?: number;
@@ -331,7 +333,7 @@ export async function processNextRun(
       await appendRunEvent(db, { runId: run.id, type: "run.validating", payload: {} });
       if (!runContext) return true;
 
-      const installCommand = "pnpm install --frozen-lockfile=false";
+      const installCommand = validationOptions.installCommand ?? "npm install --no-audit --no-fund";
       const installResult = await runSandboxCommand(
         installCommand,
         validationOptions.installTimeoutMs ?? 120_000
@@ -348,7 +350,7 @@ export async function processNextRun(
         );
       }
 
-      const buildCommand = "pnpm build";
+      const buildCommand = validationOptions.buildCommand ?? "npm run build";
       const maxRepairAttempts = validationOptions.maxRepairAttempts ?? 2;
       let buildResult = await runSandboxCommand(
         buildCommand,

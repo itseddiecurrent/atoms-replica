@@ -194,6 +194,7 @@ export function Workspace({
         }
         if (data.type === "run.failed") {
           setRunStatus("failed");
+          void refreshFiles();
           if (sentPrompt) setRetryPrompt(sentPrompt);
           setSentPrompt(null);
           setFailure({
@@ -247,6 +248,18 @@ export function Workspace({
     setSavedContent(file.content);
     setFileVersion(file.version);
     setEditorError(null);
+    setViewMode("editor");
+  }
+
+  function openEditor() {
+    const file =
+      files.find((item) => item.path === selectedFile && item.kind !== "folder") ??
+      files.find((item) => item.kind !== "folder");
+    if (file) {
+      void selectFile(file.path);
+      return;
+    }
+    setEditorError("No generated source files are available yet.");
     setViewMode("editor");
   }
 
@@ -669,7 +682,7 @@ export function Workspace({
               </button>
               <button
                 className={`rounded-md px-3 py-1.5 ${viewMode === "editor" ? "bg-white text-zinc-900 shadow-sm" : "text-zinc-500"}`}
-                onClick={() => setViewMode("editor")}
+                onClick={openEditor}
                 type="button"
               >
                 <Code2 className="mr-1.5 inline h-3.5 w-3.5" />

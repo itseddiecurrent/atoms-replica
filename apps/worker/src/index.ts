@@ -13,7 +13,13 @@ import {
   upsertProjectFile
 } from "@atom-replica/db";
 import { createCoder, createPlanner } from "@atom-replica/agent";
-import { createE2BSandboxSdk, E2BSandboxAdapter, ensureSandbox } from "@atom-replica/sandbox";
+import {
+  createE2BSandboxSdk,
+  E2BSandboxAdapter,
+  ensureSandbox,
+  SANDBOX_BUILD_COMMAND,
+  SANDBOX_INSTALL_COMMAND
+} from "@atom-replica/sandbox";
 import {
   captureException,
   logProviderCall,
@@ -140,6 +146,8 @@ if (mode === "disabled") {
     validationOptions: {
       maxRepairAttempts: Number(env.MAX_AGENT_REPAIR_ATTEMPTS),
       previewPort: Number(env.E2B_PREVIEW_PORT),
+      installCommand: SANDBOX_INSTALL_COMMAND,
+      buildCommand: SANDBOX_BUILD_COMMAND,
       installTimeoutMs: Number(env.MAX_COMMAND_DURATION_SECONDS) * 1_000,
       buildTimeoutMs: Number(env.MAX_COMMAND_DURATION_SECONDS) * 1_000,
       maxRunDurationMs: Number(env.MAX_RUN_DURATION_SECONDS) * 1_000

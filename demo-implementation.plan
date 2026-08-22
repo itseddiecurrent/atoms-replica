@@ -673,8 +673,8 @@ Web 和 Worker 共用 `packages/shared` 中的 Zod schema，确保数据库事�
 
 ### Step 10：构建验证、自动修复和实时 Preview ✅ 已完成
 
-1. 执行 `pnpm install --frozen-lockfile=false`，限制安装时长。
-2. 执行 `pnpm build`，保存精简日志并发送 command events。
+1. 在 E2B 中执行 Node 自带的 `npm install --no-audit --no-fund`，不依赖额外全局包管理器，并限制安装时长。
+2. 执行 `npm run build`，保存精简日志并发送 command events。
 3. 构建失败时提取错误、相关文件和最后一次修改交回 Agent 修复。
 4. 最多执行 `MAX_AGENT_REPAIR_ATTEMPTS` 次修复；超过上限发送 `run.failed`。
 5. 构建成功后启动 Vite dev server，轮询端口和 HTTP 200。
@@ -686,7 +686,7 @@ Web 和 Worker 共用 `packages/shared` 中的 Zod schema，确保数据库事�
 
 #### 完成总结
 
-- Worker 已在 Coder 完成后执行带超时的 `pnpm install --frozen-lockfile=false` 和 `pnpm build`，并将截断后的 stdout/stderr 持久化为 `command.output` 事件。
+- Worker 已在 Coder 完成后执行带超时的 `npm install --no-audit --no-fund` 和 `npm run build`，并将截断后的 stdout/stderr 持久化为 `command.output` 事件；E2B 非零退出会保留 exit code/stdout/stderr 进入验证与修复流程，不再误报 `INTERNAL_ERROR`。
 - 构建失败会发布带尝试次数的 `validation.failed`，并把精简后的错误日志作为 `recentContext` 交回同一 Sandbox 中的 Coder；修复次数由 `MAX_AGENT_REPAIR_ATTEMPTS` 控制，耗尽后以 `VALIDATION_FAILED` 结束 Run。
 - 构建成功后会启动 Vite、轮询 Preview HTTP 健康状态、把 URL 保存到 Project，并依次发布 `preview.ready` 和完成事件；依赖安装与 Preview 启动失败分别使用明确错误码。
 - 工作区已监听 coding、validating、command、validation 和 Preview SSE 事件；Preview URL 可在刷新后从数据库恢复，并通过不含 `allow-same-origin` 的受限 iframe 展示。

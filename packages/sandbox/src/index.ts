@@ -3,6 +3,8 @@ import { join, relative, resolve, sep } from "node:path";
 import { Sandbox } from "e2b";
 
 export const SANDBOX_WORKDIR = "/home/user/app";
+export const SANDBOX_INSTALL_COMMAND = "npm install --no-audit --no-fund";
+export const SANDBOX_BUILD_COMMAND = "npm run build";
 
 export interface CommandResult {
   exitCode: number;
@@ -52,7 +54,7 @@ export async function ensureSandbox(options: {
   for (const file of options.snapshotFiles ?? [])
     await options.adapter.writeFile(file.path, file.content);
   for (const file of options.projectFiles) await options.adapter.writeFile(file.path, file.content);
-  const install = await options.adapter.runCommand("pnpm install --frozen-lockfile=false", {
+  const install = await options.adapter.runCommand(SANDBOX_INSTALL_COMMAND, {
     timeoutMs: 120_000
   });
   if (install.exitCode !== 0)
@@ -292,14 +294,26 @@ export class E2BSandboxAdapter implements SandboxAdapter {
     command: string,
     options: { cwd?: string; timeoutMs?: number } = {}
   ): Promise<CommandResult> {
-    const result = await this.observe("commands.run", () =>
-      this.requireSandbox().commands.run(command, {
-        cwd: options.cwd
-          ? `${SANDBOX_WORKDIR}/${normalizeSandboxPath(options.cwd)}`
-          : SANDBOX_WORKDIR,
-        timeoutMs: options.timeoutMs ?? this.options.commandTimeoutMs
-      })
-    );
+    let result: { exitCode?: number; stdout?: string; stderr?: string };
+    try {
+      result = await this.observe("commands.run", () =>
+        this.requireSandbox().commands.run(command, {
+          cwd: options.cwd
+            ? `${SANDBOX_WORKDIR}/${normalizeSandboxPath(options.cwd)}`
+            : SANDBOX_WORKDIR,
+          timeoutMs: options.timeoutMs ?? this.options.commandTimeoutMs
+        })
+      );
+    } catch (error) {
+      const commandError =
+        error && typeof error === "object" ? (error as Record<string, unknown>) : undefined;
+      if (typeof commandError?.exitCode !== "number") throw error;
+      result = {
+        exitCode: commandError.exitCode,
+        stdout: typeof commandError.stdout === "string" ? commandError.stdout : "",
+        stderr: typeof commandError.stderr === "string" ? commandError.stderr : ""
+      };
+    }
     return {
       exitCode: result.exitCode ?? 0,
       stdout: capOutput(result.stdout, this.options.maxOutputChars),
@@ -311,7 +325,7 @@ export class E2BSandboxAdapter implements SandboxAdapter {
     const port = options.port ?? this.options.previewPort;
     await this.observe("preview.start", () =>
       this.requireSandbox()
-        .commands.run(`pnpm dev --host 0.0.0.0 --port ${port}`, {
+        .commands.run(`npm run dev -- --host 0.0.0.0 --port ${port}`, {
           cwd: SANDBOX_WORKDIR,
           background: true
         })

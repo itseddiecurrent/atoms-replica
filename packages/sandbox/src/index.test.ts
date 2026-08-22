@@ -104,7 +104,7 @@ describe("ensureSandbox", () => {
       ["src/App.tsx", "snapshot"],
       ["src/App.tsx", "newest"]
     ]);
-    expect(sandbox.runCommand).toHaveBeenCalledWith("pnpm install --frozen-lockfile=false", {
+    expect(sandbox.runCommand).toHaveBeenCalledWith("npm install --no-audit --no-fund", {
       timeoutMs: 120_000
     });
     expect(sandbox.startDevServer).toHaveBeenCalledWith({ port: 5173 });
@@ -157,6 +157,27 @@ describe("E2BSandboxAdapter", () => {
     );
   });
 
+  it("normalizes E2B non-zero command exits into command results", async () => {
+    const sandbox = fakeSandbox();
+    sandbox.commands.run = vi.fn().mockRejectedValue(
+      Object.assign(new Error("exit status 127"), {
+        exitCode: 127,
+        stdout: "",
+        stderr: "sh: pnpm: command not found"
+      })
+    );
+    const adapter = new E2BSandboxAdapter({
+      sdk: { create: vi.fn(), connect: vi.fn(async () => sandbox) }
+    });
+    await adapter.connect("sb-test");
+
+    await expect(adapter.runCommand("pnpm build")).resolves.toEqual({
+      exitCode: 127,
+      stdout: "",
+      stderr: "sh: pnpm: command not found"
+    });
+  });
+
   it("turns the E2B Preview hostname into an HTTPS URL", async () => {
     const sandbox = fakeSandbox();
     sandbox.getHost = vi.fn(() => "5173-sb-test.e2b.app");
@@ -201,7 +222,7 @@ describe("E2BSandboxAdapter", () => {
     await adapter.startDevServer();
     await expect(adapter.getPreviewUrl()).resolves.toBe("https://sandbox.example.test");
     expect(fetchImpl).toHaveBeenCalledWith("https://sandbox.example.test");
-    expect(sandbox.commandsRun[0]?.[0]).toContain("pnpm dev --host 0.0.0.0 --port 5173");
+    expect(sandbox.commandsRun[0]?.[0]).toContain("npm run dev -- --host 0.0.0.0 --port 5173");
   });
 
   it("restarts Vite on the configured preview port", async () => {
@@ -216,7 +237,7 @@ describe("E2BSandboxAdapter", () => {
 
     expect(sandbox.commandsRun.map(([command]) => command)).toEqual([
       "pkill -f 'vite.*--port 4173' || true",
-      "pnpm dev --host 0.0.0.0 --port 4173"
+      "npm run dev -- --host 0.0.0.0 --port 4173"
     ]);
     expect(sandbox.commandsRun[1]?.[1]).toEqual({ cwd: SANDBOX_WORKDIR, background: true });
   });

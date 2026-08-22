@@ -39,6 +39,10 @@ runs and durable runtime jobs for manual file synchronization and Preview restar
 must not contain either secret. The Worker does not receive Firebase browser or Firebase Admin
 configuration.
 
+Generated projects use `npm` inside E2B because it ships with Node and does not depend on a global
+`pnpm` installation in the selected Sandbox template. Repository and Railway builds continue to use
+the root-pinned `pnpm` version.
+
 `OPENAI_MAX_OUTPUT_TOKENS` limits one Responses API call, including visible output and reasoning
 tokens. `MAX_AGENT_TOTAL_TOKENS` is the separate cumulative budget for the complete multi-turn Run;
 the production baseline is `200000`. Keep both variables on the Worker only.
