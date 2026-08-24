@@ -42,6 +42,7 @@ function fakeSandbox(): E2BSandboxClient & {
     },
     kill: vi.fn(async () => undefined),
     setTimeout: vi.fn(async () => undefined),
+    isRunning: vi.fn(async () => true),
     getHost: vi.fn(() => "https://sandbox.example.test")
   };
 }
@@ -178,6 +179,7 @@ describe("E2BSandboxAdapter", () => {
       requestTimeoutMs: 60_000
     });
     expect(sdk.connect).toHaveBeenCalledWith("sb-test", { requestTimeoutMs: 60_000 });
+    expect(sandbox.isRunning).toHaveBeenCalledWith({ requestTimeoutMs: 10_000 });
     await adapter.writeFile("src/App.tsx", "updated");
     await expect(adapter.readFile("src/App.tsx")).resolves.toBe("file contents");
     await expect(adapter.listFiles()).resolves.toEqual(["package.json", "src/App.tsx"]);
@@ -262,6 +264,22 @@ describe("E2BSandboxAdapter", () => {
     expect(String(error)).not.toContain("provider timeout secret");
   });
 
+  it("waits for a reconnected Sandbox environment before using its filesystem", async () => {
+    const sandbox = fakeSandbox();
+    sandbox.isRunning = vi
+      .fn()
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
+    const adapter = new E2BSandboxAdapter({
+      sdk: { create: vi.fn(), connect: vi.fn(async () => sandbox) }
+    });
+
+    await adapter.connect("sb-test");
+
+    expect(sandbox.isRunning).toHaveBeenCalledTimes(3);
+  });
+
   it("recursively lists files while omitting directory entries", async () => {
     const sandbox = fakeSandbox();
     sandbox.files.list = vi.fn(async (path: string) =>
@@ -309,6 +327,22 @@ describe("E2BSandboxAdapter", () => {
       "/tmp/atom-replica-preview.mjs",
       expect.stringContaining('from "node:http"')
     );
+  });
+
+  it("retries the idempotent Preview launcher write after a transient reconnect failure", async () => {
+    const sandbox = fakeSandbox();
+    sandbox.files.write = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("environment not ready"))
+      .mockResolvedValue(undefined);
+    const adapter = new E2BSandboxAdapter({
+      sdk: { create: vi.fn(), connect: vi.fn(async () => sandbox) }
+    });
+    await adapter.connect("sb-test");
+
+    await adapter.startDevServer();
+
+    expect(sandbox.files.write).toHaveBeenCalledTimes(2);
   });
 
   it("restarts Vite on the configured preview port", async () => {

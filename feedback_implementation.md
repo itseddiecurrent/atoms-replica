@@ -190,6 +190,8 @@
 - 已核对项目锁定的 E2B SDK 及官方接口：`Sandbox.connect(id, opts)` 负责连接/恢复，Sandbox 生命周期必须随后通过独立的 `setTimeout(timeoutMs, opts)` 续租。两次控制面请求现均使用显式 `requestTimeoutMs`，并分别记录 `SANDBOX_RECONNECT_FAILED` 与 `SANDBOX_TTL_RENEWAL_FAILED`。
 - 代码审计确认过期 Sandbox 的恢复路径只执行了 `npm install`，却直接启动仅服务 `dist` 的静态 Preview；Snapshot 和 Project Files 本来就不保存 `dist`，因此恢复后的服务必然缺少构建输出。恢复现会在启动 Preview 前执行独立 `npm run build`，并对恢复文件、安装、构建、Preview prepare/stop/start/health 和数据库保存持久化脱敏阶段错误码。
 - v8 修复已在 Node 24 完整 Release gate 中通过，且不新增数据库迁移；阶段码保存在 Runtime Job 现有 durable `result_json`，UI 与 Runner 会显示阶段码和安全消息，而 Provider 原始异常、源码与凭据不会进入 Runtime Job。仍须由同 commit 的 Railway Web/Worker/Runner 重新产出成功记录并完成日志边界复核后，Step 6 才能标记完成。
+- v8 线上 Run 再次通过生成、交互与刷新，并首次把 Restart 精确定位为 `PREVIEW_PREPARE_FAILED`：E2B reconnect 与 TTL 续租已返回，但紧随其后的 `/tmp` Preview launcher 写入暂时不可用。同一 Sandbox 数秒后经 SDK 重新连接、续租、`isRunning()` 和无害 `/tmp` 写入探针全部成功，确认是 Sandbox resume 后控制面先于环境文件系统就绪的短暂竞态，而非路径或权限策略。
+- v9 在 reconnect 后轮询 E2B 环境健康再暴露 Adapter，并对幂等的 Preview launcher 写入增加短时有界重试；新增测试覆盖环境健康连续两次未就绪后恢复，以及首次文件写入失败后重试成功。必须由 v9 Railway Runner 再次完成线上闭环后才能签收 Step 6。
 
 ### Step 7：验收同一项目的增量修改 ⬜ 待完成
 

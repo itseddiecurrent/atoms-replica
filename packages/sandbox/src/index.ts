@@ -11,6 +11,7 @@ const SANDBOX_IGNORED_SEGMENTS = new Set(["node_modules", ".git", "dist", ".vite
 export const sandboxLifecycleErrorCodes = {
   SANDBOX_RECONNECT_FAILED: "SANDBOX_RECONNECT_FAILED",
   SANDBOX_TTL_RENEWAL_FAILED: "SANDBOX_TTL_RENEWAL_FAILED",
+  SANDBOX_ENV_READY_FAILED: "SANDBOX_ENV_READY_FAILED",
   SANDBOX_CREATE_FAILED: "SANDBOX_CREATE_FAILED",
   SANDBOX_TEMPLATE_FAILED: "SANDBOX_TEMPLATE_FAILED",
   SANDBOX_RESTORE_FILES_FAILED: "SANDBOX_RESTORE_FILES_FAILED",
@@ -47,6 +48,25 @@ async function sandboxStage<T>(
     if (error instanceof SandboxLifecycleError) throw error;
     throw new SandboxLifecycleError(code, message, { cause: error });
   }
+}
+
+async function retrySandboxStage<T>(
+  code: SandboxLifecycleErrorCode,
+  message: string,
+  operation: () => Promise<T>,
+  attempts = 3
+): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      if (attempt < attempts)
+        await new Promise((resolvePromise) => setTimeout(resolvePromise, attempt * 500));
+    }
+  }
+  throw new SandboxLifecycleError(code, message, { cause: lastError });
 }
 export const SANDBOX_PREVIEW_SERVER_SOURCE = `import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
@@ -232,6 +252,7 @@ export interface E2BSandboxClient {
   commands: E2BCommands;
   kill(): Promise<void>;
   setTimeout(timeoutMs: number, options?: { requestTimeoutMs?: number }): Promise<void>;
+  isRunning(options?: { requestTimeoutMs?: number }): Promise<boolean>;
   getHost(port: number): string;
 }
 
@@ -420,6 +441,28 @@ export class E2BSandboxAdapter implements SandboxAdapter {
           })
         )
     );
+    await sandboxStage(
+      sandboxLifecycleErrorCodes.SANDBOX_ENV_READY_FAILED,
+      "The reconnected E2B Sandbox did not become ready.",
+      async () => {
+        const deadline = Date.now() + this.options.commandTimeoutMs;
+        while (Date.now() < deadline) {
+          const remaining = Math.max(1, deadline - Date.now());
+          try {
+            if (
+              await sandbox.isRunning({
+                requestTimeoutMs: Math.min(10_000, remaining)
+              })
+            )
+              return;
+          } catch {
+            // The control plane can return before the Sandbox environment becomes ready.
+          }
+          await new Promise((resolvePromise) => setTimeout(resolvePromise, 500));
+        }
+        throw new Error("Sandbox environment readiness timed out.");
+      }
+    );
     this.sandbox = sandbox;
   }
 
@@ -517,7 +560,7 @@ export class E2BSandboxAdapter implements SandboxAdapter {
         Math.min(this.options.maxOutputChars, 2_000)
       );
     };
-    await sandboxStage(
+    await retrySandboxStage(
       sandboxLifecycleErrorCodes.PREVIEW_PREPARE_FAILED,
       "Could not prepare the Preview server.",
       () =>
