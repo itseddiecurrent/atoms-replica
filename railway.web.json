@@ -4,6 +4,7 @@
     "builder": "NIXPACKS",
     "buildCommand": "pnpm --filter @atom-replica/web... build",
     "watchPatterns": [
+      "/railway.acceptance.json",
       "/apps/web/**",
       "/packages/db/**",
       "/packages/shared/**",

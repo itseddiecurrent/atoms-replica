@@ -60,6 +60,8 @@ For a read-only prerequisite check:
 - Railway deployment contract: [`docs/deployment/railway.md`](./docs/deployment/railway.md)
 - Production smoke checklist:
   [`docs/testing/manual-production-smoke.md`](./docs/testing/manual-production-smoke.md)
+- Preview production acceptance:
+  [`docs/testing/preview-production-acceptance.md`](./docs/testing/preview-production-acceptance.md)
 
 Railway deploys this monorepo as two services from `main`:
 

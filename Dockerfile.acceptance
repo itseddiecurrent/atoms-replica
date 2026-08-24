@@ -1,0 +1,16 @@
+FROM node:24-bookworm-slim
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates chromium \
+  && rm -rf /var/lib/apt/lists/*
+
+ENV E2E_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
+WORKDIR /app
+
+COPY scripts ./scripts
+
+RUN node --check scripts/live-smoke.mjs \
+  && node --check scripts/preview-acceptance.mjs \
+  && node --test scripts/first-generation-evidence.test.mjs scripts/preview-acceptance.test.mjs
+
+CMD ["node", "scripts/live-smoke.mjs"]

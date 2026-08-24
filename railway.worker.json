@@ -4,6 +4,7 @@
     "builder": "NIXPACKS",
     "buildCommand": "pnpm --filter @atom-replica/worker... build",
     "watchPatterns": [
+      "/railway.acceptance.json",
       "/apps/worker/**",
       "/packages/agent/**",
       "/packages/db/**",

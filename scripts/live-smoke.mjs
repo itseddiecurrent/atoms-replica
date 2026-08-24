@@ -7,6 +7,10 @@ import {
   productionBaseUrl,
   validateFirstGenerationEvidence
 } from "./first-generation-evidence.mjs";
+import {
+  formatPreviewAcceptanceReport,
+  runPreviewBrowserAcceptance
+} from "./preview-acceptance.mjs";
 
 for (const path of [".env", ".env.test-account"]) {
   try {
@@ -17,13 +21,14 @@ for (const path of [".env", ".env.test-account"]) {
 }
 
 const fixedPrompt = "创建一个带添加、完成和删除功能的 Todo App，并显示未完成数量。";
-const acceptanceRunnerRelease = "step5-node-preview-pruned-files-v1";
+const acceptanceRunnerRelease = "step6-browser-preview-interaction-v1";
 const baseUrl = productionBaseUrl(required("E2E_BASE_URL"));
 const email = required("E2E_EMAIL");
 const password = required("E2E_PASSWORD");
 const firebaseApiKey = process.env.E2E_FIREBASE_API_KEY ?? required("NEXT_PUBLIC_FIREBASE_API_KEY");
 const maxWaitMs = Number(process.env.E2E_MAX_WAIT_MS ?? 12 * 60_000);
 const initialOnly = process.env.E2E_INITIAL_ONLY === "true";
+const previewOnly = process.env.E2E_PREVIEW_ONLY === "true";
 let projectId;
 let cookie;
 
@@ -148,12 +153,12 @@ async function waitForRuntimeJob(runtimeJobId) {
 
 try {
   console.info(`Acceptance runner release: ${acceptanceRunnerRelease}`);
-  console.info("1/9 Checking production readiness...");
+  console.info("1/10 Checking production readiness...");
   const health = await fetch(`${baseUrl}/api/health`, { signal: AbortSignal.timeout(10_000) });
   assert.equal(health.status, 200);
   assert.equal((await health.json()).database, "ok");
 
-  console.info("2/9 Signing in through Firebase and creating a server session...");
+  console.info("2/10 Signing in through Firebase and creating a server session...");
   const firebase = await fetch(
     `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${encodeURIComponent(firebaseApiKey)}`,
     {
@@ -176,7 +181,7 @@ try {
   cookie = session.headers.get("set-cookie")?.match(/^([^;]+)/)?.[1];
   assert.ok(cookie, "Session response did not set a cookie.");
 
-  console.info("3/9 Creating the fixed Todo App and testing SSE reconnection...");
+  console.info("3/10 Creating the fixed Todo App and testing SSE reconnection...");
   const created = await jsonRequest("/api/projects", {
     method: "POST",
     body: JSON.stringify({ prompt: fixedPrompt })
@@ -185,7 +190,7 @@ try {
   const initial = await consumeRun(created.body.runId, { reconnectAfterFirstEvent: true });
   assert.ok(initial.previewUrl, "Initial run did not publish a Preview URL.");
 
-  console.info("4/9 Checking the live Preview...");
+  console.info("4/10 Checking the live Preview and generation evidence...");
   const preview = await fetch(initial.previewUrl, { signal: AbortSignal.timeout(30_000) });
   assert.equal(preview.status, 200);
   assert.match(await preview.text(), /<html|<div[^>]+id=["']root/i);
@@ -216,52 +221,70 @@ try {
     projectId = undefined;
     console.info("First production generation acceptance passed.");
   } else {
-    console.info("5/9 Applying a follow-up Agent change...");
-    const followUp = await jsonRequest(`/api/projects/${projectId}/messages`, {
-      method: "POST",
-      body: JSON.stringify({ content: "Add a visible count of remaining Todo items." })
+    console.info("5/10 Exercising Preview interactions, reload recovery, CSP, and UI restart...");
+    const previewEvidence = await runPreviewBrowserAcceptance({
+      baseUrl,
+      projectId,
+      runId: created.body.runId,
+      previewUrl: initial.previewUrl,
+      cookie
     });
-    await consumeRun(followUp.body.runId);
+    console.info(formatPreviewAcceptanceReport(previewEvidence));
 
-    console.info("6/9 Testing manual edit synchronization through the Worker...");
-    const files = (await jsonRequest(`/api/projects/${projectId}/files`)).body.files;
-    const target = files.find((file) => file.path === "src/App.tsx");
-    assert.ok(target, "Generated project is missing src/App.tsx.");
-    const current = (
-      await jsonRequest(
-        `/api/projects/${projectId}/files/content?path=${encodeURIComponent(target.path)}`
-      )
-    ).body;
-    const saved = await jsonRequest(`/api/projects/${projectId}/files/content`, {
-      method: "PUT",
-      body: JSON.stringify({
-        path: target.path,
-        content: `${current.content}\n/* live-smoke-manual-edit */\n`,
-        version: current.version
-      })
-    });
-    await waitForRuntimeJob(saved.body.runtimeJobId);
+    if (previewOnly) {
+      console.info("Cleaning up the Preview acceptance project...");
+      await jsonRequest(`/api/projects/${projectId}`, { method: "DELETE" });
+      projectId = undefined;
+      console.info("Preview production acceptance passed.");
+      process.exitCode = 0;
+    } else {
+      console.info("6/10 Applying a follow-up Agent change...");
+      const followUp = await jsonRequest(`/api/projects/${projectId}/messages`, {
+        method: "POST",
+        body: JSON.stringify({ content: "Add a visible count of remaining Todo items." })
+      });
+      await consumeRun(followUp.body.runId);
 
-    console.info("7/9 Testing Preview restart/recovery...");
-    const restart = await jsonRequest(`/api/projects/${projectId}/runtime/restart`, {
-      method: "POST"
-    });
-    const restarted = await waitForRuntimeJob(restart.body.runtimeJobId);
-    assert.ok(restarted.previewUrl, "Restart did not return a Preview URL.");
+      console.info("7/10 Testing manual edit synchronization through the Worker...");
+      const files = (await jsonRequest(`/api/projects/${projectId}/files`)).body.files;
+      const target = files.find((file) => file.path === "src/App.tsx");
+      assert.ok(target, "Generated project is missing src/App.tsx.");
+      const current = (
+        await jsonRequest(
+          `/api/projects/${projectId}/files/content?path=${encodeURIComponent(target.path)}`
+        )
+      ).body;
+      const saved = await jsonRequest(`/api/projects/${projectId}/files/content`, {
+        method: "PUT",
+        body: JSON.stringify({
+          path: target.path,
+          content: `${current.content}\n/* live-smoke-manual-edit */\n`,
+          version: current.version
+        })
+      });
+      await waitForRuntimeJob(saved.body.runtimeJobId);
 
-    console.info("8/9 Downloading and validating the source ZIP...");
-    const download = await fetch(`${baseUrl}/api/projects/${projectId}/download`, {
-      headers: { Cookie: cookie },
-      signal: AbortSignal.timeout(30_000)
-    });
-    assert.equal(download.status, 200);
-    const zip = new Uint8Array(await download.arrayBuffer());
-    assert.equal(new DataView(zip.buffer).getUint32(0, true), 0x04034b50);
+      console.info("8/10 Testing direct Preview restart/recovery evidence...");
+      const restart = await jsonRequest(`/api/projects/${projectId}/runtime/restart`, {
+        method: "POST"
+      });
+      const restarted = await waitForRuntimeJob(restart.body.runtimeJobId);
+      assert.ok(restarted.previewUrl, "Restart did not return a Preview URL.");
 
-    console.info("9/9 Cleaning up the smoke-test project...");
-    await jsonRequest(`/api/projects/${projectId}`, { method: "DELETE" });
-    projectId = undefined;
-    console.info("Live production smoke test passed.");
+      console.info("9/10 Downloading and validating the source ZIP...");
+      const download = await fetch(`${baseUrl}/api/projects/${projectId}/download`, {
+        headers: { Cookie: cookie },
+        signal: AbortSignal.timeout(30_000)
+      });
+      assert.equal(download.status, 200);
+      const zip = new Uint8Array(await download.arrayBuffer());
+      assert.equal(new DataView(zip.buffer).getUint32(0, true), 0x04034b50);
+
+      console.info("10/10 Cleaning up the smoke-test project...");
+      await jsonRequest(`/api/projects/${projectId}`, { method: "DELETE" });
+      projectId = undefined;
+      console.info("Live production smoke test passed.");
+    }
   }
 } finally {
   if (projectId && cookie) {

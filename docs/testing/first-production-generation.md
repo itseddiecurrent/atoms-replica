@@ -34,7 +34,9 @@ summary. It never includes credentials or generated source.
 
 For final production evidence, create a third temporary Railway service named `acceptance-runner` in
 the same Project and Environment as Web and Worker. Point it to the same GitHub repository and exact
-commit, then set its Config File path to `/railway.acceptance.json`.
+commit. The repository's acceptance config advances with the active feedback step and now runs the
+Step 6 browser Gate; use `pnpm test:generation` from a trusted machine when Step 5 alone must be
+repeated.
 
 Set only these service-scoped variables on `acceptance-runner`:
 
@@ -51,9 +53,9 @@ service. The Runner only acts like a remote browser against the public Web URL. 
 a healthcheck are not required.
 
 The config uses `restartPolicyType: NEVER`, so the acceptance test runs exactly once per deployment
-and exits instead of retrying a failed test and consuming more Run/OpenAI/E2B quota. A successful
-deployment ends as `Completed`; its Deploy Logs contain the `First Production Generation Record`.
-Use Railway Redeploy when an intentional rerun is required.
+and exits instead of retrying a failed test and consuming more Run/OpenAI/E2B quota. The Step 6
+Deploy Logs contain both the `First Production Generation Record` and the browser-level
+`Preview Production Acceptance Record`. Use Railway Redeploy when an intentional rerun is required.
 
 After saving the record, delete `acceptance-runner` or remove `E2E_PASSWORD`, then rotate the
 dedicated account password. Never add these Runner variables to Web or Worker.

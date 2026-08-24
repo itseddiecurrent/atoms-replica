@@ -61,16 +61,22 @@ the production baseline is `200000`. Keep both variables on the Worker only.
 ## Temporary acceptance runner
 
 - Config-as-code path: `/railway.acceptance.json`
-- Build: syntax and evidence-validator tests only
-- Start: `pnpm test:generation`
+- Build: the dedicated Node 24/Chromium `/Dockerfile.acceptance` plus syntax and evidence tests
+- Start: `E2E_PREVIEW_ONLY=true node scripts/live-smoke.mjs`
 - Restart policy: `NEVER`
 - Public networking: disabled
 - Variables: copy names from `deploy/acceptance.env.example`
 
-The Runner must target the Web service's public HTTPS URL so the evidence covers Railway edge,
-authentication, Web, Worker, OpenAI, E2B, PostgreSQL and Preview. It receives only dedicated E2E
-credentials and the Firebase browser key; it must not receive database, Firebase Admin, OpenAI, E2B
-or Supabase privileged secrets. Delete the service or its password after acceptance.
+The current Runner performs the Step 6 browser Gate: it targets the Web service's public HTTPS URL,
+generates the fixed Todo App, exercises it in Chromium, reloads the workspace iframe, and clicks the
+UI Restart action through the Worker. The evidence therefore covers Railway edge, authentication,
+Web, Worker, OpenAI, E2B, PostgreSQL and Preview. It receives only dedicated E2E credentials and the
+Firebase browser key; it must not receive database, Firebase Admin, OpenAI, E2B or Supabase
+privileged secrets. Delete the service or its password after acceptance.
+
+Web and Worker both watch `/railway.acceptance.json`. Advancing the acceptance Gate therefore
+redeploys all three services from the same Git commit even when production application code itself
+did not change; the resulting evidence can record one unambiguous commit baseline.
 
 ## Release gate
 

@@ -166,6 +166,18 @@
 
 验收标准：Preview 可加载、可交互、可刷新恢复、可通过 Worker 重启，并且所有运行均发生在远程 Sandbox 中。
 
+#### 实现与当前验收状态
+
+- 已新增 `pnpm test:preview` 浏览器级生产 Gate：沿用 Step 5 固定中文 Prompt 创建真实项目，在 Headless Chromium 中加载公开 Workspace 与 E2B Preview，而不是仅检查 Preview HTML 或源码。
+- Gate 会真实执行空输入、添加两条 Todo、完成、恢复和删除交互，并要求未完成数量严格经历 `2 → 1 → 2 → 1`；同时确认 Preview 没有发出 POST/PUT/PATCH/DELETE 请求，证明这些 Todo 状态保持在浏览器本地。
+- Gate 会从认证后的 Workspace 自动发现 iframe，要求 HTTPS Preview 文档真实返回 200；随后重载 Workspace 并再次要求同一服务端 Preview URL 成功加载，从而覆盖首次自动出现与刷新恢复。
+- Restart 不再只通过 API 直调验收：Chromium 会点击 Workspace Header 的 Restart 按钮，截取脱敏后的同源 fetch 结果，确认 Web 创建 durable Runtime Job、Worker 将其以 `restart_preview` 完成，并再次探测返回的 HTTPS Preview 健康状态。
+- 浏览器监听 Network 与 Log 事件，任何 CSP、Mixed Content、Origin 或 Frame Blocking 错误都会使 Gate 失败；证据只输出 Project/Run ID、HTTP 状态和行为布尔值，不输出 Session Cookie、请求头、Prompt、Todo 测试文本或生成源码。
+- 已新增专用 Node 24/Chromium `Dockerfile.acceptance`，Railway 一次性 Runner 现在执行 Step 6 Gate，仍保持 `restartPolicyType: NEVER` 且只接收专用账号和 Firebase Browser Key，不接收任何 Worker/数据库特权密钥。
+- Web 与 Worker 均将 `/railway.acceptance.json` 纳入部署 Watch Pattern，因此推进验收 Gate 时三个服务会从同一个新 commit 重新部署，避免 Runner 与目标生产服务版本不一致。
+- 已新增 `docs/testing/preview-production-acceptance.md` 和 5 条证据验证测试，记录可信本机与 Railway 执行方式、浏览器断言、脱敏边界以及 Web/Worker/E2B 日志人工复核要求。
+- 当前代码与可重复验收机制已实现；必须将本 commit 部署至 Web/Worker，并由 Railway Runner 产出 `Preview Production Acceptance Record`，再核对对应时间窗口日志无凭据、完整 Prompt 或源码泄漏后，才可将 Step 6 标记为完成。
+
 ### Step 7：验收同一项目的增量修改 ⬜ 待完成
 
 1. 在 Step 5 的同一项目发送第二条 Prompt：`把页面标题改成 Focus Todo，并增加 All、Active、Completed 三个筛选按钮。`
