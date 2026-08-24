@@ -6,7 +6,7 @@ import {
   createStorageAdmin,
   getProductionResourceReferences
 } from "../packages/db/dist/index.js";
-import { listE2BSandboxes } from "../packages/sandbox/dist/index.js";
+import { killE2BSandbox, listE2BSandboxes } from "../packages/sandbox/dist/index.js";
 
 try {
   loadEnvFile(".env");
@@ -43,6 +43,7 @@ async function listStorageKeys(bucket, prefix = "") {
 
 const staleSeconds = Number(process.env.RUN_STALE_AFTER_SECONDS ?? 30);
 const orphanGraceSeconds = Number(process.env.E2E_RESOURCE_ORPHAN_GRACE_SECONDS ?? 120);
+const cleanupConfirmed = process.env.E2E_RESOURCE_CLEANUP_CONFIRMED === "true";
 assert.ok(staleSeconds > 0 && orphanGraceSeconds > 0, "Audit grace values must be positive.");
 const database = createDatabaseClient(required("DATABASE_URL"));
 
@@ -55,20 +56,41 @@ try {
     required("NEXT_PUBLIC_SUPABASE_URL"),
     required("SUPABASE_SERVICE_ROLE_KEY")
   );
-  const [storageKeys, sandboxes] = await Promise.all([
-    listStorageKeys(storage.storage.from(required("SUPABASE_STORAGE_BUCKET"))),
+  const bucket = storage.storage.from(required("SUPABASE_STORAGE_BUCKET"));
+  let [storageKeys, sandboxes] = await Promise.all([
+    listStorageKeys(bucket),
     listE2BSandboxes(required("E2B_API_KEY"))
   ]);
   const referencedStorage = new Set(references.snapshotStorageKeys);
   const referencedSandboxes = new Set(references.sandboxIds);
-  const orphanStorageKeys = storageKeys.filter((key) => !referencedStorage.has(key));
+  let orphanStorageKeys = storageKeys.filter((key) => !referencedStorage.has(key));
   const sandboxCutoff = Date.now() - orphanGraceSeconds * 1_000;
-  const orphanSandboxIds = sandboxes
+  let orphanSandboxIds = sandboxes
     .filter(
       ({ sandboxId, startedAt }) =>
         !referencedSandboxes.has(sandboxId) && startedAt.getTime() < sandboxCutoff
     )
     .map(({ sandboxId }) => sandboxId);
+
+  if (cleanupConfirmed && (orphanStorageKeys.length || orphanSandboxIds.length)) {
+    if (orphanStorageKeys.length) {
+      const { error } = await bucket.remove(orphanStorageKeys);
+      if (error) throw error;
+    }
+    for (const sandboxId of orphanSandboxIds)
+      await killE2BSandbox(sandboxId, required("E2B_API_KEY"));
+    [storageKeys, sandboxes] = await Promise.all([
+      listStorageKeys(bucket),
+      listE2BSandboxes(required("E2B_API_KEY"))
+    ]);
+    orphanStorageKeys = storageKeys.filter((key) => !referencedStorage.has(key));
+    orphanSandboxIds = sandboxes
+      .filter(
+        ({ sandboxId, startedAt }) =>
+          !referencedSandboxes.has(sandboxId) && startedAt.getTime() < sandboxCutoff
+      )
+      .map(({ sandboxId }) => sandboxId);
+  }
 
   assert.equal(references.staleRuns, 0, "Production contains a stale active Run.");
   assert.equal(references.staleRuntimeJobs, 0, "Production contains a stale Runtime Job.");
@@ -77,8 +99,16 @@ try {
     0,
     "Production contains a stale resource cleanup job."
   );
-  assert.deepEqual(orphanStorageKeys, [], "Snapshot Storage contains an unreferenced object.");
-  assert.deepEqual(orphanSandboxIds, [], "E2B contains an old unreferenced Sandbox.");
+  assert.equal(
+    orphanStorageKeys.length,
+    0,
+    `Snapshot Storage contains ${orphanStorageKeys.length} unreferenced objects.`
+  );
+  assert.equal(
+    orphanSandboxIds.length,
+    0,
+    `E2B contains ${orphanSandboxIds.length} old unreferenced Sandboxes.`
+  );
 
   console.info("# Production Resource Hygiene Record");
   console.info("");
@@ -91,5 +121,5 @@ try {
   console.info("");
   console.info("No database credential, provider key, Sandbox ID, or Snapshot key is printed.");
 } finally {
-  await database.close();
+  await Promise.race([database.close(), new Promise((resolve) => setTimeout(resolve, 5_000))]);
 }

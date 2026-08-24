@@ -52,3 +52,12 @@ pnpm test:production-resources
 It compares all database Sandbox/Snapshot references (including in-flight cleanup jobs) with the E2B
 account and private Storage bucket, and rejects stale Runs, stale Worker jobs, old unreferenced
 Sandboxes, or unreferenced Snapshot objects. It prints counts only, never resource IDs or credentials.
+
+If the audit finds leftovers from an older release, inspect the read-only result first. To remove only
+the exact Storage objects and old E2B Sandboxes that have no database or in-flight cleanup reference,
+rerun with the explicit maintenance confirmation, then run the read-only audit once more:
+
+```sh
+E2E_RESOURCE_CLEANUP_CONFIRMED=true pnpm test:production-resources
+pnpm test:production-resources
+```

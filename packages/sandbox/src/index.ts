@@ -326,6 +326,10 @@ export async function listE2BSandboxes(apiKey = process.env.E2B_API_KEY) {
   return sandboxes;
 }
 
+export async function killE2BSandbox(sandboxId: string, apiKey = process.env.E2B_API_KEY) {
+  return Sandbox.kill(sandboxId, apiKey ? { apiKey } : undefined);
+}
+
 export function normalizeSandboxPath(path: string): string {
   if (!path || path.includes("\\") || path.includes("\0")) {
     throw new Error("Sandbox path must be a non-empty POSIX relative path");

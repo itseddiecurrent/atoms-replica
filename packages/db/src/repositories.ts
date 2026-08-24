@@ -62,48 +62,45 @@ export async function checkDatabaseHealth(db: Database) {
 }
 
 export async function getProductionResourceReferences(db: Database, staleBefore: Date) {
-  const [staleRunRows, staleRuntimeRows, staleCleanupRows, sandboxRows, snapshotRows, cleanupRows] =
-    await Promise.all([
-      db
-        .select({ id: runs.id })
-        .from(runs)
-        .where(
-          and(
-            inArray(runs.status, activeRunStatuses),
-            sql`coalesce(${runs.heartbeatAt}, ${runs.createdAt}) < ${staleBefore}`
-          )
-        ),
-      db
-        .select({ id: runtimeJobs.id })
-        .from(runtimeJobs)
-        .where(
-          and(
-            inArray(runtimeJobs.status, activeRuntimeJobStatuses),
-            sql`coalesce(${runtimeJobs.heartbeatAt}, ${runtimeJobs.createdAt}) < ${staleBefore}`
-          )
-        ),
-      db
-        .select({ id: resourceCleanupJobs.id })
-        .from(resourceCleanupJobs)
-        .where(
-          and(
-            inArray(resourceCleanupJobs.status, activeRuntimeJobStatuses),
-            sql`coalesce(${resourceCleanupJobs.heartbeatAt}, ${resourceCleanupJobs.createdAt}) < ${staleBefore}`
-          )
-        ),
-      db
-        .select({ sandboxId: projects.sandboxId })
-        .from(projects)
-        .where(sql`${projects.sandboxId} is not null`),
-      db.select({ storageKey: snapshots.storageKey }).from(snapshots),
-      db
-        .select({
-          sandboxId: resourceCleanupJobs.sandboxId,
-          snapshotStorageKeys: resourceCleanupJobs.snapshotStorageKeys
-        })
-        .from(resourceCleanupJobs)
-        .where(inArray(resourceCleanupJobs.status, activeRuntimeJobStatuses))
-    ]);
+  const staleRunRows = await db
+    .select({ id: runs.id })
+    .from(runs)
+    .where(
+      and(
+        inArray(runs.status, activeRunStatuses),
+        sql`coalesce(${runs.heartbeatAt}, ${runs.createdAt}) < ${staleBefore.toISOString()}::timestamptz`
+      )
+    );
+  const staleRuntimeRows = await db
+    .select({ id: runtimeJobs.id })
+    .from(runtimeJobs)
+    .where(
+      and(
+        inArray(runtimeJobs.status, activeRuntimeJobStatuses),
+        sql`coalesce(${runtimeJobs.heartbeatAt}, ${runtimeJobs.createdAt}) < ${staleBefore.toISOString()}::timestamptz`
+      )
+    );
+  const staleCleanupRows = await db
+    .select({ id: resourceCleanupJobs.id })
+    .from(resourceCleanupJobs)
+    .where(
+      and(
+        inArray(resourceCleanupJobs.status, activeRuntimeJobStatuses),
+        sql`coalesce(${resourceCleanupJobs.heartbeatAt}, ${resourceCleanupJobs.createdAt}) < ${staleBefore.toISOString()}::timestamptz`
+      )
+    );
+  const sandboxRows = await db
+    .select({ sandboxId: projects.sandboxId })
+    .from(projects)
+    .where(sql`${projects.sandboxId} is not null`);
+  const snapshotRows = await db.select({ storageKey: snapshots.storageKey }).from(snapshots);
+  const cleanupRows = await db
+    .select({
+      sandboxId: resourceCleanupJobs.sandboxId,
+      snapshotStorageKeys: resourceCleanupJobs.snapshotStorageKeys
+    })
+    .from(resourceCleanupJobs)
+    .where(inArray(resourceCleanupJobs.status, activeRuntimeJobStatuses));
   return {
     staleRuns: staleRunRows.length,
     staleRuntimeJobs: staleRuntimeRows.length,

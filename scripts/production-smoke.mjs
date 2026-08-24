@@ -32,6 +32,7 @@ let secondaryCookie;
 let secondaryIdToken;
 let completedProjectId;
 let cancelledProjectId;
+const projectRunIds = new Map();
 
 function required(name) {
   const value = process.env[name];
@@ -144,22 +145,38 @@ async function consumeRun(runId, { expectedTerminal, onEvent, forceReconnect = f
   while (Date.now() < deadline) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), Math.max(1, deadline - Date.now()));
-    const response = await fetch(`${baseUrl}/api/runs/${runId}/events`, {
-      headers: {
-        Cookie: primaryCookie,
-        Accept: "text/event-stream",
-        ...(cursor ? { "Last-Event-ID": String(cursor) } : {})
-      },
-      signal: controller.signal
-    });
+    let response;
+    try {
+      response = await fetch(`${baseUrl}/api/runs/${runId}/events`, {
+        headers: {
+          Cookie: primaryCookie,
+          Accept: "text/event-stream",
+          ...(cursor ? { "Last-Event-ID": String(cursor) } : {})
+        },
+        signal: controller.signal
+      });
+    } catch (error) {
+      clearTimeout(timeout);
+      if (Date.now() >= deadline) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      continue;
+    }
     assert.equal(response.status, 200, `SSE returned ${response.status}.`);
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
     let reconnect = false;
+    let transportInterrupted = false;
     try {
       while (Date.now() < deadline) {
-        const { done, value } = await reader.read();
+        let packet;
+        try {
+          packet = await reader.read();
+        } catch {
+          transportInterrupted = true;
+          break;
+        }
+        const { done, value } = packet;
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
         for (;;) {
@@ -190,6 +207,7 @@ async function consumeRun(runId, { expectedTerminal, onEvent, forceReconnect = f
       clearTimeout(timeout);
       await reader.cancel().catch(() => undefined);
     }
+    if (transportInterrupted) await new Promise((resolve) => setTimeout(resolve, 500));
   }
   throw new Error(`Run ${runId} did not reach ${expectedTerminal} within ${maxWaitMs}ms.`);
 }
@@ -250,8 +268,18 @@ async function collectAccessMatrix(cookie, targets) {
   const matrix = {};
   for (const [surface, target] of Object.entries(targets)) {
     const result = await request(target.path, { ...target, cookie });
-    matrix[surface] = result.response.status;
-    if (surface === "events" && result.response.body) await result.response.body.cancel();
+    let status = result.response.status;
+    if (surface === "project" && status === 200) {
+      const page = await result.response.text();
+      if (/404|page could not be found|not found/i.test(page)) status = 404;
+    }
+    matrix[surface] = status;
+    if (
+      surface === "events" &&
+      result.response.body &&
+      result.response.headers.get("content-type")?.includes("text/event-stream")
+    )
+      await result.response.body.cancel();
   }
   return matrix;
 }
@@ -289,6 +317,7 @@ try {
     201
   );
   completedProjectId = created.projectId;
+  projectRunIds.set(created.projectId, created.runId);
   const completed = await consumeRun(created.runId, {
     expectedTerminal: "run.completed",
     forceReconnect: true
@@ -358,6 +387,7 @@ try {
     201
   );
   cancelledProjectId = cancellable.projectId;
+  projectRunIds.set(cancellable.projectId, cancellable.runId);
   let cancelRequested = false;
   const cancellationStream = await consumeRun(cancellable.runId, {
     expectedTerminal: "run.cancelled",
@@ -395,8 +425,10 @@ try {
 
   console.info("8/9 Deleting both projects and waiting for Worker resource cleanup...");
   const completedProjectCleanup = await deleteAndWait(completedProjectId);
+  projectRunIds.delete(completedProjectId);
   completedProjectId = undefined;
   const cancelledProjectCleanup = await deleteAndWait(cancelledProjectId);
+  projectRunIds.delete(cancelledProjectId);
   cancelledProjectId = undefined;
   const dashboard = await request("/projects", { cookie: primaryCookie });
   const dashboardHtml = await dashboard.response.text();
@@ -448,10 +480,34 @@ try {
   throw error;
 } finally {
   for (const projectId of [completedProjectId, cancelledProjectId].filter(Boolean)) {
-    await request(`/api/projects/${projectId}`, {
-      cookie: primaryCookie,
-      method: "DELETE"
-    }).catch(() => undefined);
+    const runId = projectRunIds.get(projectId);
+    if (runId)
+      await request(`/api/runs/${runId}/cancel`, {
+        cookie: primaryCookie,
+        method: "POST"
+      }).catch(() => undefined);
+    const deadline = Date.now() + 30_000;
+    while (Date.now() < deadline) {
+      const deleted = await request(`/api/projects/${projectId}`, {
+        cookie: primaryCookie,
+        method: "DELETE"
+      }).catch(() => undefined);
+      if (!deleted || deleted.response.status === 404) break;
+      if (deleted.response.status === 202) {
+        const cleanupJobId = deleted.body?.cleanupJobId;
+        if (cleanupJobId) {
+          while (Date.now() < deadline) {
+            const cleanup = await request(`/api/resource-cleanups/${cleanupJobId}`, {
+              cookie: primaryCookie
+            }).catch(() => undefined);
+            if (!cleanup || cleanup.body?.status === "completed") break;
+            await new Promise((resolve) => setTimeout(resolve, 1_000));
+          }
+        }
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+    }
   }
   if (secondaryIdToken) {
     await firebaseRequest("delete", { idToken: secondaryIdToken }).catch(() => undefined);
