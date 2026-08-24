@@ -66,6 +66,8 @@ For a read-only prerequisite check:
   [`docs/testing/incremental-production-acceptance.md`](./docs/testing/incremental-production-acceptance.md)
 - Persistence, recovery, and download production acceptance:
   [`docs/testing/persistence-production-acceptance.md`](./docs/testing/persistence-production-acceptance.md)
+- Automated production smoke, fault, authorization, and cleanup acceptance:
+  [`docs/testing/automated-production-smoke.md`](./docs/testing/automated-production-smoke.md)
 
 Railway deploys this monorepo as two services from `main`:
 

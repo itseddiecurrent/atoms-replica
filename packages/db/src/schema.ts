@@ -45,6 +45,13 @@ export const runtimeJobStatusEnum = pgEnum("runtime_job_status", [
   "failed"
 ]);
 
+export const resourceCleanupStatusEnum = pgEnum("resource_cleanup_status", [
+  "queued",
+  "processing",
+  "completed",
+  "failed"
+]);
+
 export const users = pgTable("users", {
   id: text("id").primaryKey(),
   email: text("email").notNull(),
@@ -205,6 +212,29 @@ export const runtimeJobs = pgTable(
   ]
 );
 
+export const resourceCleanupJobs = pgTable(
+  "resource_cleanup_jobs",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    userId: text("user_id").notNull(),
+    projectId: uuid("project_id").notNull(),
+    sandboxId: text("sandbox_id"),
+    snapshotStorageKeys: jsonb("snapshot_storage_keys").$type<string[]>().notNull(),
+    status: resourceCleanupStatusEnum("status").default("queued").notNull(),
+    errorMessage: text("error_message"),
+    workerId: text("worker_id"),
+    heartbeatAt: timestamp("heartbeat_at", { withTimezone: true }),
+    availableAt: timestamp("available_at", { withTimezone: true }).defaultNow().notNull(),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull()
+  },
+  (table) => [
+    index("resource_cleanup_jobs_user_id_idx").on(table.userId),
+    index("resource_cleanup_jobs_claim_idx").on(table.status, table.availableAt, table.createdAt)
+  ]
+);
+
 export type User = typeof users.$inferSelect;
 export type Project = typeof projects.$inferSelect;
 export type Conversation = typeof conversations.$inferSelect;
@@ -214,3 +244,4 @@ export type RunEvent = typeof runEvents.$inferSelect;
 export type ProjectFile = typeof projectFiles.$inferSelect;
 export type Snapshot = typeof snapshots.$inferSelect;
 export type RuntimeJob = typeof runtimeJobs.$inferSelect;
+export type ResourceCleanupJob = typeof resourceCleanupJobs.$inferSelect;

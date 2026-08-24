@@ -147,6 +147,20 @@ describe("ensureSandbox", () => {
 });
 
 describe("E2BSandboxAdapter", () => {
+  it("kills a detached Sandbox by ID without renewing its TTL", async () => {
+    const sdk: E2BSandboxSdk = {
+      create: vi.fn(),
+      connect: vi.fn(),
+      kill: vi.fn().mockResolvedValue(true)
+    };
+    const adapter = new E2BSandboxAdapter({ sdk });
+
+    await adapter.kill("sb-detached");
+
+    expect(sdk.kill).toHaveBeenCalledWith("sb-detached");
+    expect(sdk.connect).not.toHaveBeenCalled();
+  });
+
   it("creates a sandbox and copies the fixed template without secrets or build output", async () => {
     const sandbox = fakeSandbox();
     const sdk: E2BSandboxSdk = { create: vi.fn(async () => sandbox), connect: vi.fn() };

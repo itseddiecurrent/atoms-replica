@@ -72,7 +72,7 @@ describe("GET /api/runs/:runId/events", () => {
       {
         id: 9,
         type: "run.cancelled",
-        payloadJson: { message: "Run cancelled by user." },
+        payloadJson: { code: "RUN_CANCELLED", message: "Run cancelled by user." },
         createdAt: new Date("2026-08-22T00:00:00.000Z")
       }
     ]);

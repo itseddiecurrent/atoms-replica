@@ -253,7 +253,7 @@ describe("createCoder", () => {
         { apiKey: "key", model: "model", maxOutputTokens: 1000, maxToolCalls: 0, fetchImpl },
         sandbox
       ).run({ prompt: "Build", plan, fileTree: [] })
-    ).rejects.toMatchObject({ code: "CODER_LIMIT" });
+    ).rejects.toMatchObject({ code: "CODER_LIMIT", limit: "tool_calls" });
     expect(sandbox.listFiles).not.toHaveBeenCalled();
   });
 
@@ -284,8 +284,45 @@ describe("createCoder", () => {
         },
         sandbox
       ).run({ prompt: "Build", plan, fileTree: [] })
-    ).rejects.toMatchObject({ code: "CODER_LIMIT", message: "Coder token limit exceeded." });
+    ).rejects.toMatchObject({
+      code: "CODER_LIMIT",
+      limit: "tokens",
+      message: "Coder token limit exceeded."
+    });
     expect(sandbox.listFiles).not.toHaveBeenCalled();
+  });
+
+  it("enforces the configured turn limit", async () => {
+    const fetchImpl = vi.fn().mockReturnValue(
+      response({
+        output: [
+          {
+            type: "function_call",
+            name: "list_files",
+            call_id: "call-1",
+            arguments: JSON.stringify({ path: null })
+          }
+        ]
+      })
+    );
+    await expect(
+      createCoder(
+        { apiKey: "key", model: "model", maxOutputTokens: 1000, maxTurns: 1, fetchImpl },
+        fakeSandbox()
+      ).run({ prompt: "Build", plan, fileTree: [] })
+    ).rejects.toMatchObject({ code: "CODER_LIMIT", limit: "turns" });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("enforces the configured Coder duration limit", async () => {
+    const fetchImpl = vi.fn();
+    await expect(
+      createCoder(
+        { apiKey: "key", model: "model", maxOutputTokens: 1000, maxDurationMs: -1, fetchImpl },
+        fakeSandbox()
+      ).run({ prompt: "Build", plan, fileTree: [] })
+    ).rejects.toMatchObject({ code: "CODER_LIMIT", limit: "duration" });
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   it("returns tool errors to the model and does not mark the run complete", async () => {

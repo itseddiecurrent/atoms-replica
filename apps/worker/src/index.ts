@@ -192,6 +192,27 @@ if (mode === "disabled") {
         );
       }
     },
+    resourceCleanupHandler: async (job) => {
+      if (job.sandboxId) {
+        const sandbox = new E2BSandboxAdapter({
+          sdk: createE2BSandboxSdk(env.E2B_API_KEY),
+          commandTimeoutMs: Number(env.MAX_COMMAND_DURATION_SECONDS) * 1_000,
+          onProviderCall: (call) => logProviderCall({ provider: "e2b", ...call })
+        });
+        await observeProviderCall({ provider: "e2b", operation: "sandbox.cleanup" }, () =>
+          sandbox.kill(job.sandboxId!)
+        );
+      }
+      if (job.snapshotStorageKeys.length) {
+        await observeProviderCall(
+          { provider: "supabase", operation: "storage.cleanup" },
+          async () => {
+            const { error } = await snapshotBucket.remove(job.snapshotStorageKeys);
+            if (error) throw error;
+          }
+        );
+      }
+    },
     validationOptions: {
       maxRepairAttempts: Number(env.MAX_AGENT_REPAIR_ATTEMPTS),
       previewPort: Number(env.E2B_PREVIEW_PORT),

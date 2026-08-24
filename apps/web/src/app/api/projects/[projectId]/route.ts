@@ -1,4 +1,4 @@
-import { deleteProject, getProjectForUser } from "@atom-replica/db";
+import { deleteProjectForUserAndQueueCleanup } from "@atom-replica/db";
 import { errorBody, errorCodes } from "@atom-replica/shared";
 import { NextResponse } from "next/server";
 import { z } from "zod";
@@ -31,13 +31,18 @@ export async function DELETE(
     });
   }
 
-  const database = getDatabase();
-  const project = await getProjectForUser(database, { projectId, userId: user.id });
-  if (!project)
+  const result = await deleteProjectForUserAndQueueCleanup(getDatabase(), {
+    projectId,
+    userId: user.id
+  });
+  if (!result)
     return NextResponse.json(errorBody(errorCodes.NOT_FOUND, "Project not found."), {
       status: 404
     });
-
-  await deleteProject(database, projectId);
-  return new Response(null, { status: 204 });
+  if (result.status === "busy")
+    return NextResponse.json(
+      errorBody(errorCodes.CONFLICT, "Cancel the active Run or wait for Preview work to finish."),
+      { status: 409 }
+    );
+  return NextResponse.json({ cleanupJobId: result.cleanupJobId }, { status: 202 });
 }

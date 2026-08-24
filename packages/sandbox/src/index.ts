@@ -260,6 +260,7 @@ export interface E2BSandboxClient {
 export interface E2BSandboxSdk {
   create(options?: { template?: string; timeoutMs?: number }): Promise<E2BSandboxClient>;
   connect(sandboxId: string, options?: { requestTimeoutMs?: number }): Promise<E2BSandboxClient>;
+  kill?(sandboxId: string, options?: { requestTimeoutMs?: number }): Promise<boolean>;
 }
 
 export interface E2BAdapterOptions {
@@ -298,8 +299,31 @@ export function createE2BSandboxSdk(apiKey = process.env.E2B_API_KEY): E2BSandbo
         ...options
       });
       return sandbox as unknown as E2BSandboxClient;
+    },
+    async kill(sandboxId, options = {}) {
+      return Sandbox.kill(sandboxId, {
+        ...(apiKey ? { apiKey } : {}),
+        ...options
+      });
     }
   };
+}
+
+export async function listE2BSandboxes(apiKey = process.env.E2B_API_KEY) {
+  const paginator = Sandbox.list(apiKey ? { apiKey } : undefined);
+  const sandboxes: Array<{ sandboxId: string; startedAt: Date; endAt: Date; state: string }> = [];
+  while (paginator.hasNext) {
+    const page = await paginator.nextItems(apiKey ? { apiKey } : undefined);
+    sandboxes.push(
+      ...page.map(({ sandboxId, startedAt, endAt, state }) => ({
+        sandboxId,
+        startedAt,
+        endAt,
+        state
+      }))
+    );
+  }
+  return sandboxes;
 }
 
 export function normalizeSandboxPath(path: string): string {
@@ -689,7 +713,8 @@ export class E2BSandboxAdapter implements SandboxAdapter {
   async kill(sandboxId?: string): Promise<void> {
     await this.observe("sandbox.kill", async () => {
       if (sandboxId && this.sandbox?.sandboxId !== sandboxId) {
-        await (await this.options.sdk.connect(sandboxId)).kill();
+        if (this.options.sdk.kill) await this.options.sdk.kill(sandboxId);
+        else await (await this.options.sdk.connect(sandboxId)).kill();
         return;
       }
       if (this.sandbox) await this.sandbox.kill();

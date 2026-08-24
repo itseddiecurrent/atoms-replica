@@ -6,6 +6,7 @@ import {
   messages,
   projectFiles,
   projects,
+  resourceCleanupJobs,
   runtimeJobs,
   runEvents,
   runs,
@@ -25,7 +26,8 @@ describe("database schema", () => {
         runEvents,
         projectFiles,
         snapshots,
-        runtimeJobs
+        runtimeJobs,
+        resourceCleanupJobs
       ].map(getTableName)
     ).toEqual([
       "users",
@@ -36,8 +38,22 @@ describe("database schema", () => {
       "run_events",
       "project_files",
       "snapshots",
-      "runtime_jobs"
+      "runtime_jobs",
+      "resource_cleanup_jobs"
     ]);
+  });
+
+  it("defines a durable external resource cleanup queue", () => {
+    expect(Object.keys(resourceCleanupJobs)).toEqual(
+      expect.arrayContaining([
+        "userId",
+        "projectId",
+        "sandboxId",
+        "snapshotStorageKeys",
+        "status",
+        "heartbeatAt"
+      ])
+    );
   });
 
   it("defines a durable runtime job queue", () => {

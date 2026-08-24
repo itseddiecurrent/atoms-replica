@@ -7,6 +7,7 @@ import {
   messages,
   projectFiles,
   projects,
+  resourceCleanupJobs,
   runtimeJobs,
   runEvents,
   runs,
@@ -27,6 +28,13 @@ export type ClaimedRuntimeJob = {
   projectId: string;
   type: "sync_file" | "restart_preview";
   payloadJson: unknown;
+};
+
+export type ClaimedResourceCleanupJob = {
+  id: string;
+  projectId: string;
+  sandboxId: string | null;
+  snapshotStorageKeys: string[];
 };
 
 const activeRunStatuses = ["queued", "planning", "coding", "validating"] as const;
@@ -51,6 +59,64 @@ export async function upsertUser(db: Database, input: { id: string; email: strin
 
 export async function checkDatabaseHealth(db: Database) {
   await db.execute(sql`select 1 as ok`);
+}
+
+export async function getProductionResourceReferences(db: Database, staleBefore: Date) {
+  const [staleRunRows, staleRuntimeRows, staleCleanupRows, sandboxRows, snapshotRows, cleanupRows] =
+    await Promise.all([
+      db
+        .select({ id: runs.id })
+        .from(runs)
+        .where(
+          and(
+            inArray(runs.status, activeRunStatuses),
+            sql`coalesce(${runs.heartbeatAt}, ${runs.createdAt}) < ${staleBefore}`
+          )
+        ),
+      db
+        .select({ id: runtimeJobs.id })
+        .from(runtimeJobs)
+        .where(
+          and(
+            inArray(runtimeJobs.status, activeRuntimeJobStatuses),
+            sql`coalesce(${runtimeJobs.heartbeatAt}, ${runtimeJobs.createdAt}) < ${staleBefore}`
+          )
+        ),
+      db
+        .select({ id: resourceCleanupJobs.id })
+        .from(resourceCleanupJobs)
+        .where(
+          and(
+            inArray(resourceCleanupJobs.status, activeRuntimeJobStatuses),
+            sql`coalesce(${resourceCleanupJobs.heartbeatAt}, ${resourceCleanupJobs.createdAt}) < ${staleBefore}`
+          )
+        ),
+      db
+        .select({ sandboxId: projects.sandboxId })
+        .from(projects)
+        .where(sql`${projects.sandboxId} is not null`),
+      db.select({ storageKey: snapshots.storageKey }).from(snapshots),
+      db
+        .select({
+          sandboxId: resourceCleanupJobs.sandboxId,
+          snapshotStorageKeys: resourceCleanupJobs.snapshotStorageKeys
+        })
+        .from(resourceCleanupJobs)
+        .where(inArray(resourceCleanupJobs.status, activeRuntimeJobStatuses))
+    ]);
+  return {
+    staleRuns: staleRunRows.length,
+    staleRuntimeJobs: staleRuntimeRows.length,
+    staleResourceCleanupJobs: staleCleanupRows.length,
+    sandboxIds: [
+      ...sandboxRows.map(({ sandboxId }) => sandboxId).filter((value): value is string => !!value),
+      ...cleanupRows.map(({ sandboxId }) => sandboxId).filter((value): value is string => !!value)
+    ],
+    snapshotStorageKeys: [
+      ...snapshotRows.map(({ storageKey }) => storageKey),
+      ...cleanupRows.flatMap(({ snapshotStorageKeys }) => snapshotStorageKeys)
+    ]
+  };
 }
 
 export async function createProjectWithInitialRun(
@@ -388,7 +454,12 @@ export async function cancelRunForUser(db: Database, input: { runId: string; use
       return "terminal" as const;
     await tx
       .update(runs)
-      .set({ status: "cancelled", finishedAt: new Date() })
+      .set({
+        status: "cancelled",
+        errorCode: "RUN_CANCELLED",
+        errorMessage: "Run cancelled by user.",
+        finishedAt: new Date()
+      })
       .where(eq(runs.id, input.runId));
     await tx
       .update(projects)
@@ -397,7 +468,7 @@ export async function cancelRunForUser(db: Database, input: { runId: string; use
     await tx.insert(runEvents).values({
       runId: input.runId,
       type: "run.cancelled",
-      payloadJson: { message: "Run cancelled by user." }
+      payloadJson: { code: "RUN_CANCELLED", message: "Run cancelled by user." }
     });
     return "cancelled" as const;
   });
@@ -697,6 +768,130 @@ export async function recoverStaleRuntimeJobs(db: Database, staleBefore: Date) {
     })
     .where(and(eq(runtimeJobs.status, "processing"), lt(runtimeJobs.heartbeatAt, staleBefore)))
     .returning({ id: runtimeJobs.id });
+  return recovered.length;
+}
+
+export async function getResourceCleanupJobForUser(
+  db: Database,
+  input: { cleanupJobId: string; userId: string }
+) {
+  const [job] = await db
+    .select({
+      id: resourceCleanupJobs.id,
+      projectId: resourceCleanupJobs.projectId,
+      status: resourceCleanupJobs.status,
+      errorMessage: resourceCleanupJobs.errorMessage,
+      createdAt: resourceCleanupJobs.createdAt,
+      finishedAt: resourceCleanupJobs.finishedAt
+    })
+    .from(resourceCleanupJobs)
+    .where(
+      and(
+        eq(resourceCleanupJobs.id, input.cleanupJobId),
+        eq(resourceCleanupJobs.userId, input.userId)
+      )
+    )
+    .limit(1);
+  return job;
+}
+
+export async function claimNextResourceCleanupJob(
+  db: Database,
+  workerId: string
+): Promise<ClaimedResourceCleanupJob | null> {
+  return db.transaction(async (tx) => {
+    const [job] = await tx
+      .select()
+      .from(resourceCleanupJobs)
+      .where(
+        and(
+          eq(resourceCleanupJobs.status, "queued"),
+          lte(resourceCleanupJobs.availableAt, new Date())
+        )
+      )
+      .orderBy(asc(resourceCleanupJobs.createdAt))
+      .limit(1)
+      .for("update", { skipLocked: true });
+    if (!job) return null;
+    const [claimed] = await tx
+      .update(resourceCleanupJobs)
+      .set({ status: "processing", workerId, heartbeatAt: new Date(), startedAt: new Date() })
+      .where(and(eq(resourceCleanupJobs.id, job.id), eq(resourceCleanupJobs.status, "queued")))
+      .returning({
+        id: resourceCleanupJobs.id,
+        projectId: resourceCleanupJobs.projectId,
+        sandboxId: resourceCleanupJobs.sandboxId,
+        snapshotStorageKeys: resourceCleanupJobs.snapshotStorageKeys
+      });
+    return claimed ?? null;
+  });
+}
+
+export async function heartbeatResourceCleanupJob(
+  db: Database,
+  cleanupJobId: string,
+  workerId: string
+) {
+  await db
+    .update(resourceCleanupJobs)
+    .set({ heartbeatAt: new Date() })
+    .where(
+      and(eq(resourceCleanupJobs.id, cleanupJobId), eq(resourceCleanupJobs.workerId, workerId))
+    );
+}
+
+export async function completeResourceCleanupJob(
+  db: Database,
+  input: { cleanupJobId: string; workerId: string }
+) {
+  await db
+    .update(resourceCleanupJobs)
+    .set({
+      status: "completed",
+      errorMessage: null,
+      heartbeatAt: new Date(),
+      finishedAt: new Date()
+    })
+    .where(
+      and(
+        eq(resourceCleanupJobs.id, input.cleanupJobId),
+        eq(resourceCleanupJobs.workerId, input.workerId)
+      )
+    );
+}
+
+export async function failResourceCleanupJob(
+  db: Database,
+  input: { cleanupJobId: string; workerId: string; message: string }
+) {
+  await db
+    .update(resourceCleanupJobs)
+    .set({ status: "failed", errorMessage: input.message, finishedAt: new Date() })
+    .where(
+      and(
+        eq(resourceCleanupJobs.id, input.cleanupJobId),
+        eq(resourceCleanupJobs.workerId, input.workerId)
+      )
+    );
+}
+
+export async function recoverStaleResourceCleanupJobs(db: Database, staleBefore: Date) {
+  const recovered = await db
+    .update(resourceCleanupJobs)
+    .set({
+      status: "queued",
+      workerId: null,
+      heartbeatAt: null,
+      startedAt: null,
+      availableAt: new Date()
+    })
+    .where(
+      and(
+        eq(resourceCleanupJobs.status, "processing"),
+        lt(resourceCleanupJobs.heartbeatAt, staleBefore)
+      )
+    )
+    .returning({ id: resourceCleanupJobs.id });
   return recovered.length;
 }
 
@@ -1024,4 +1219,51 @@ export async function finalizeRun(
 
 export async function deleteProject(db: Database, projectId: string) {
   await db.delete(projects).where(eq(projects.id, projectId));
+}
+
+export async function deleteProjectForUserAndQueueCleanup(
+  db: Database,
+  input: { projectId: string; userId: string }
+) {
+  return db.transaction(async (tx) => {
+    const [project] = await tx
+      .select({ id: projects.id, sandboxId: projects.sandboxId })
+      .from(projects)
+      .where(and(eq(projects.id, input.projectId), eq(projects.userId, input.userId)))
+      .limit(1)
+      .for("update");
+    if (!project) return null;
+    const [activeRun] = await tx
+      .select({ id: runs.id })
+      .from(runs)
+      .where(and(eq(runs.projectId, input.projectId), inArray(runs.status, activeRunStatuses)))
+      .limit(1);
+    const [activeRuntimeJob] = await tx
+      .select({ id: runtimeJobs.id })
+      .from(runtimeJobs)
+      .where(
+        and(
+          eq(runtimeJobs.projectId, input.projectId),
+          inArray(runtimeJobs.status, activeRuntimeJobStatuses)
+        )
+      )
+      .limit(1);
+    if (activeRun || activeRuntimeJob) return { status: "busy" as const };
+    const storedSnapshots = await tx
+      .select({ storageKey: snapshots.storageKey })
+      .from(snapshots)
+      .where(eq(snapshots.projectId, input.projectId));
+    const [cleanup] = await tx
+      .insert(resourceCleanupJobs)
+      .values({
+        userId: input.userId,
+        projectId: input.projectId,
+        sandboxId: project.sandboxId,
+        snapshotStorageKeys: storedSnapshots.map(({ storageKey }) => storageKey)
+      })
+      .returning({ id: resourceCleanupJobs.id });
+    if (!cleanup) throw new Error("Failed to queue project resource cleanup.");
+    await tx.delete(projects).where(eq(projects.id, input.projectId));
+    return { status: "queued" as const, cleanupJobId: cleanup.id };
+  });
 }

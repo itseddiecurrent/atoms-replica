@@ -3,27 +3,33 @@ import {
   beginRunCoding,
   beginRunValidation,
   claimNextRun,
+  claimNextResourceCleanupJob,
   completeRun,
+  completeResourceCleanupJob,
   completeRuntimeJob,
   createSnapshot,
   createDatabaseClient,
   claimNextRuntimeJob,
   failRun,
+  failResourceCleanupJob,
   failRuntimeJob,
   finalizeRun,
   getMessageContent,
   getProjectAgentContext,
   heartbeatRun,
+  heartbeatResourceCleanupJob,
   heartbeatRuntimeJob,
   isRunCancelled,
   recordRunUsage,
   recoverStaleRuns,
+  recoverStaleResourceCleanupJobs,
   recoverStaleRuntimeJobs,
   pruneProjectSnapshots,
   saveProjectPreview,
   saveRunPlan,
   upsertProjectFile,
   type ClaimedRuntimeJob,
+  type ClaimedResourceCleanupJob,
   type Database
 } from "@atom-replica/db";
 import type { CoderInput, ImplementationPlan } from "@atom-replica/agent";
@@ -115,6 +121,8 @@ type RuntimeJobHandler = (
   job: ClaimedRuntimeJob
 ) => Promise<Record<string, string | number | boolean | null>>;
 
+type ResourceCleanupHandler = (job: ClaimedResourceCleanupJob) => Promise<void>;
+
 export class RuntimeJobProcessingError extends Error {
   constructor(
     readonly code: string,
@@ -173,6 +181,44 @@ export async function processNextRuntimeJob(
       runId: job.id,
       projectId: job.projectId,
       code: errorCodes.SANDBOX_FAILED
+    });
+  } finally {
+    clearInterval(heartbeat);
+  }
+  return true;
+}
+
+export async function processNextResourceCleanupJob(
+  db: Database,
+  workerId: string,
+  handler: ResourceCleanupHandler,
+  hooks: RuntimeHooks = {},
+  heartbeatIntervalMs = 5_000
+) {
+  const job = await claimNextResourceCleanupJob(db, workerId);
+  if (!job) return false;
+  const heartbeat = setInterval(() => {
+    void heartbeatResourceCleanupJob(db, job.id, workerId).catch((error) =>
+      hooks.onError?.(error, {
+        runId: job.id,
+        projectId: job.projectId,
+        code: errorCodes.INTERNAL_ERROR
+      })
+    );
+  }, heartbeatIntervalMs);
+  try {
+    await handler(job);
+    await completeResourceCleanupJob(db, { cleanupJobId: job.id, workerId });
+  } catch (error) {
+    await failResourceCleanupJob(db, {
+      cleanupJobId: job.id,
+      workerId,
+      message: "Project resource cleanup failed. Review Worker logs and retry cleanup."
+    });
+    hooks.onError?.(error, {
+      runId: job.id,
+      projectId: job.projectId,
+      code: errorCodes.INTERNAL_ERROR
     });
   } finally {
     clearInterval(heartbeat);
@@ -697,6 +743,7 @@ export async function startWorker(
     snapshotStore?: SnapshotStore;
     hooks?: RuntimeHooks;
     runtimeJobHandler?: RuntimeJobHandler;
+    resourceCleanupHandler?: ResourceCleanupHandler;
     signal?: AbortSignal;
   }
 ) {
@@ -704,7 +751,16 @@ export async function startWorker(
     if (options.staleAfterMs) {
       await recoverStaleRuns(db, new Date(Date.now() - options.staleAfterMs));
       await recoverStaleRuntimeJobs(db, new Date(Date.now() - options.staleAfterMs));
+      await recoverStaleResourceCleanupJobs(db, new Date(Date.now() - options.staleAfterMs));
     }
+    if (options.resourceCleanupHandler)
+      await processNextResourceCleanupJob(
+        db,
+        options.workerId,
+        options.resourceCleanupHandler,
+        options.hooks,
+        Math.max(1_000, Math.floor((options.staleAfterMs ?? 30_000) / 3))
+      );
     if (options.runtimeJobHandler)
       await processNextRuntimeJob(
         db,

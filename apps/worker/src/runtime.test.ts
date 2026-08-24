@@ -3,6 +3,7 @@ import type { ImplementationPlan } from "@atom-replica/agent";
 
 const {
   claimNextRun,
+  claimNextResourceCleanupJob,
   claimNextRuntimeJob,
   appendRunEvent,
   beginRunCoding,
@@ -10,12 +11,16 @@ const {
   createSnapshot,
   finalizeRun,
   heartbeatRun,
+  heartbeatResourceCleanupJob,
   heartbeatRuntimeJob,
   completeRun,
+  completeResourceCleanupJob,
   completeRuntimeJob,
   failRun,
+  failResourceCleanupJob,
   failRuntimeJob,
   recoverStaleRuns,
+  recoverStaleResourceCleanupJobs,
   recoverStaleRuntimeJobs,
   pruneProjectSnapshots,
   getMessageContent,
@@ -27,6 +32,7 @@ const {
   upsertProjectFile
 } = vi.hoisted(() => ({
   claimNextRun: vi.fn(),
+  claimNextResourceCleanupJob: vi.fn(),
   claimNextRuntimeJob: vi.fn(),
   appendRunEvent: vi.fn(),
   beginRunCoding: vi.fn(),
@@ -34,12 +40,16 @@ const {
   createSnapshot: vi.fn(),
   finalizeRun: vi.fn(),
   heartbeatRun: vi.fn(),
+  heartbeatResourceCleanupJob: vi.fn(),
   heartbeatRuntimeJob: vi.fn(),
   completeRun: vi.fn(),
+  completeResourceCleanupJob: vi.fn(),
   completeRuntimeJob: vi.fn(),
   failRun: vi.fn(),
+  failResourceCleanupJob: vi.fn(),
   failRuntimeJob: vi.fn(),
   recoverStaleRuns: vi.fn(),
+  recoverStaleResourceCleanupJobs: vi.fn(),
   recoverStaleRuntimeJobs: vi.fn(),
   pruneProjectSnapshots: vi.fn(),
   getMessageContent: vi.fn(),
@@ -53,6 +63,7 @@ const {
 
 vi.mock("@atom-replica/db", () => ({
   claimNextRun,
+  claimNextResourceCleanupJob,
   claimNextRuntimeJob,
   appendRunEvent,
   beginRunCoding,
@@ -60,12 +71,16 @@ vi.mock("@atom-replica/db", () => ({
   createSnapshot,
   finalizeRun,
   heartbeatRun,
+  heartbeatResourceCleanupJob,
   heartbeatRuntimeJob,
   completeRun,
+  completeResourceCleanupJob,
   completeRuntimeJob,
   failRun,
+  failResourceCleanupJob,
   failRuntimeJob,
   recoverStaleRuns,
+  recoverStaleResourceCleanupJobs,
   recoverStaleRuntimeJobs,
   pruneProjectSnapshots,
   getMessageContent,
@@ -81,9 +96,53 @@ vi.mock("@atom-replica/db", () => ({
 import {
   RuntimeJobProcessingError,
   getWorkerMode,
+  processNextResourceCleanupJob,
   processNextRun,
   processNextRuntimeJob
 } from "./runtime";
+
+describe("processNextResourceCleanupJob", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("durably completes external resource cleanup", async () => {
+    claimNextResourceCleanupJob.mockResolvedValue({
+      id: "cleanup-1",
+      projectId: "project-1",
+      sandboxId: "sandbox-1",
+      snapshotStorageKeys: ["project-1/run-1.zip"]
+    });
+    const handler = vi.fn().mockResolvedValue(undefined);
+    await expect(
+      processNextResourceCleanupJob("database" as never, "worker-1", handler)
+    ).resolves.toBe(true);
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "cleanup-1", sandboxId: "sandbox-1" })
+    );
+    expect(completeResourceCleanupJob).toHaveBeenCalledWith("database", {
+      cleanupJobId: "cleanup-1",
+      workerId: "worker-1"
+    });
+  });
+
+  it("stores cleanup failures for an explicit retry", async () => {
+    claimNextResourceCleanupJob.mockResolvedValue({
+      id: "cleanup-1",
+      projectId: "project-1",
+      sandboxId: "sandbox-1",
+      snapshotStorageKeys: []
+    });
+    await processNextResourceCleanupJob(
+      "database" as never,
+      "worker-1",
+      vi.fn().mockRejectedValue(new Error("E2B unavailable"))
+    );
+    expect(failResourceCleanupJob).toHaveBeenCalledWith("database", {
+      cleanupJobId: "cleanup-1",
+      workerId: "worker-1",
+      message: "Project resource cleanup failed. Review Worker logs and retry cleanup."
+    });
+  });
+});
 
 describe("getWorkerMode", () => {
   it("disables polling only for the explicit true value", () => {
@@ -636,6 +695,48 @@ describe("processNextRun", () => {
     expect(failRun).toHaveBeenCalledWith(
       "database",
       expect.objectContaining({ code: "AI_LIMIT", message: "Coder token limit exceeded." })
+    );
+  });
+
+  it.each(["turns", "tool_calls"])("maps the Coder %s limit to AI_LIMIT", async (limit) => {
+    claimNextRun.mockResolvedValue({
+      id: "run-1",
+      projectId: "project-1",
+      triggerMessageId: "message-1"
+    });
+    getMessageContent.mockResolvedValue("Build a dashboard");
+    const error = Object.assign(new Error(`Coder ${limit} limit exceeded.`), {
+      code: "CODER_LIMIT",
+      limit
+    });
+    const coder = { run: vi.fn().mockRejectedValue(error) };
+
+    await processNextRun("database" as never, "worker-1", undefined, coder);
+
+    expect(failRun).toHaveBeenCalledWith(
+      "database",
+      expect.objectContaining({ code: "AI_LIMIT", message: expect.stringContaining(limit) })
+    );
+  });
+
+  it("maps the Coder duration limit to RUN_TIMEOUT", async () => {
+    claimNextRun.mockResolvedValue({
+      id: "run-1",
+      projectId: "project-1",
+      triggerMessageId: "message-1"
+    });
+    getMessageContent.mockResolvedValue("Build a dashboard");
+    const error = Object.assign(new Error("Coder duration limit exceeded."), {
+      code: "CODER_LIMIT",
+      limit: "duration"
+    });
+    const coder = { run: vi.fn().mockRejectedValue(error) };
+
+    await processNextRun("database" as never, "worker-1", undefined, coder);
+
+    expect(failRun).toHaveBeenCalledWith(
+      "database",
+      expect.objectContaining({ code: "RUN_TIMEOUT" })
     );
   });
 

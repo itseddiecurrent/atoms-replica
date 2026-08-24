@@ -22,6 +22,13 @@
       "when": 1787382000000,
       "tag": "0002_runtime_jobs",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1787558400000,
+      "tag": "0003_resource_cleanup_jobs",
+      "breakpoints": true
     }
   ]
 }

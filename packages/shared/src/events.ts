@@ -24,7 +24,7 @@ export const runEventSchema = z.discriminatedUnion("type", [
   z.object({
     ...eventBase,
     type: z.literal("run.cancelled"),
-    payload: z.object({ message: z.string() })
+    payload: z.object({ code: z.literal("RUN_CANCELLED").optional(), message: z.string() })
   }),
   z.object({
     ...eventBase,

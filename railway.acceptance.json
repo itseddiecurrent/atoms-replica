@@ -17,11 +17,14 @@
       "/scripts/persistence-smoke.mjs",
       "/scripts/persistence-acceptance.mjs",
       "/scripts/persistence-acceptance.test.mjs",
-      "/scripts/persistence-browser.mjs"
+      "/scripts/persistence-browser.mjs",
+      "/scripts/production-smoke.mjs",
+      "/scripts/production-smoke-acceptance.mjs",
+      "/scripts/production-smoke-acceptance.test.mjs"
     ]
   },
   "deploy": {
-    "startCommand": "node --trace-uncaught --enable-source-maps scripts/persistence-smoke.mjs",
+    "startCommand": "node --trace-uncaught --enable-source-maps scripts/production-smoke.mjs",
     "restartPolicyType": "NEVER"
   }
 }

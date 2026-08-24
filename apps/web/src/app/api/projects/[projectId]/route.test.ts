@@ -1,10 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { requireUser, getDatabase, getProjectForUser, deleteProject } = vi.hoisted(() => ({
+const { requireUser, getDatabase, deleteProjectForUserAndQueueCleanup } = vi.hoisted(() => ({
   requireUser: vi.fn(),
   getDatabase: vi.fn(),
-  getProjectForUser: vi.fn(),
-  deleteProject: vi.fn()
+  deleteProjectForUserAndQueueCleanup: vi.fn()
 }));
 
 vi.mock("@/lib/server/auth", async () => {
@@ -12,7 +11,7 @@ vi.mock("@/lib/server/auth", async () => {
   return { AuthenticationRequiredError, requireUser };
 });
 vi.mock("@/lib/server/database", () => ({ getDatabase }));
-vi.mock("@atom-replica/db", () => ({ getProjectForUser, deleteProject }));
+vi.mock("@atom-replica/db", () => ({ deleteProjectForUserAndQueueCleanup }));
 
 import { AuthenticationRequiredError } from "@/lib/server/auth";
 import { DELETE } from "./route";
@@ -32,24 +31,38 @@ describe("DELETE /api/projects/:projectId", () => {
       params: Promise.resolve({ projectId })
     });
     expect(response.status).toBe(401);
-    expect(deleteProject).not.toHaveBeenCalled();
+    expect(deleteProjectForUserAndQueueCleanup).not.toHaveBeenCalled();
   });
 
   it("does not delete another user's project", async () => {
-    getProjectForUser.mockResolvedValue(undefined);
+    deleteProjectForUserAndQueueCleanup.mockResolvedValue(undefined);
     const response = await DELETE(new Request("http://localhost"), {
       params: Promise.resolve({ projectId })
     });
     expect(response.status).toBe(404);
-    expect(deleteProject).not.toHaveBeenCalled();
+    expect(deleteProjectForUserAndQueueCleanup).toHaveBeenCalledWith("database", {
+      projectId,
+      userId: "user-1"
+    });
   });
 
   it("deletes an owned project", async () => {
-    getProjectForUser.mockResolvedValue({ id: projectId });
+    deleteProjectForUserAndQueueCleanup.mockResolvedValue({
+      status: "queued",
+      cleanupJobId: "cleanup-1"
+    });
     const response = await DELETE(new Request("http://localhost"), {
       params: Promise.resolve({ projectId })
     });
-    expect(response.status).toBe(204);
-    expect(deleteProject).toHaveBeenCalledWith("database", projectId);
+    expect(response.status).toBe(202);
+    expect(await response.json()).toEqual({ cleanupJobId: "cleanup-1" });
+  });
+
+  it("does not delete a project while its Worker work is active", async () => {
+    deleteProjectForUserAndQueueCleanup.mockResolvedValue({ status: "busy" });
+    const response = await DELETE(new Request("http://localhost"), {
+      params: Promise.resolve({ projectId })
+    });
+    expect(response.status).toBe(409);
   });
 });

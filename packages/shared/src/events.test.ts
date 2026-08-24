@@ -79,7 +79,7 @@ describe("runEventSchema", () => {
       runId: "550e8400-e29b-41d4-a716-446655440000",
       timestamp: "2026-08-22T00:00:00.000Z",
       type: "run.cancelled",
-      payload: { message: "Run cancelled by user." }
+      payload: { code: "RUN_CANCELLED", message: "Run cancelled by user." }
     });
     expect(event.type).toBe("run.cancelled");
   });
