@@ -15,6 +15,7 @@
     "build:worker": "pnpm --filter @atom-replica/worker... build",
     "lint": "eslint .",
     "typecheck": "pnpm -r --if-present typecheck",
+    "pretest": "pnpm run dev:prepare",
     "test": "pnpm run test:security-scan && pnpm run test:production-baseline && pnpm run test:account-provisioning && pnpm run test:openai-readiness && pnpm run test:e2b-readiness && pnpm run test:first-generation-evidence && pnpm run test:preview-evidence && pnpm -r --if-present test",
     "test:account:provision": "node scripts/provision-test-account.mjs",
     "test:account-provisioning": "node --test scripts/provision-test-account.test.mjs",

@@ -18,13 +18,14 @@ const runIntegrationTests = process.env.RUN_SUPABASE_INTEGRATION_TESTS === "true
 const integration = runIntegrationTests ? describe : describe.skip;
 
 integration("Supabase data layer", () => {
-  const env = getDataEnv();
+  let env: ReturnType<typeof getDataEnv>;
   const userId = `integration-${randomUUID()}`;
   const storageKey = `integration/${randomUUID()}.zip`;
   let database: DatabaseClient;
   let projectId: string | undefined;
 
   beforeAll(() => {
+    env = getDataEnv();
     database = createDatabaseClient(env.DATABASE_URL);
   });
 
