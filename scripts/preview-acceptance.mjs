@@ -15,6 +15,10 @@ const DEFAULT_BROWSER_PATHS = {
 
 const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
+export function canonicalPreviewUrl(value) {
+  return new URL(value).href;
+}
+
 export function resolveBrowserExecutable(env = process.env, platform = process.platform) {
   if (env.E2E_BROWSER_EXECUTABLE_PATH) {
     if (!existsSync(env.E2E_BROWSER_EXECUTABLE_PATH)) {
@@ -242,6 +246,35 @@ async function waitUntil(
     await sleep(intervalMs);
   }
   throw new Error(lastError ? `${message} ${lastError.message}` : message);
+}
+
+async function workspacePreviewLoaded(page, previewUrl) {
+  const expectedHref = canonicalPreviewUrl(previewUrl);
+  const state = await page.evaluate(`(() => {
+    const frame = document.querySelector("iframe");
+    const expectedHref = ${JSON.stringify(expectedHref)};
+    const observedHref = frame ? new URL(frame.src).href : undefined;
+    const iframeLoads = window.__atomAcceptance?.iframeLoads ?? [];
+    return {
+      framePresent: Boolean(frame),
+      urlMatches: observedHref === expectedHref,
+      loadObserved: iframeLoads.some((url) => new URL(url).href === expectedHref),
+      observedOrigin: observedHref ? new URL(observedHref).origin : undefined,
+      loadCount: iframeLoads.length
+    };
+  })()`);
+  if (!state.framePresent) throw new Error("No Preview iframe is present in the workspace.");
+  if (!state.urlMatches) {
+    throw new Error(
+      `Workspace iframe points to ${state.observedOrigin ?? "an unknown origin"}, not the generated Preview origin.`
+    );
+  }
+  if (!state.loadObserved) {
+    throw new Error(
+      `Preview iframe URL matched, but no load event was observed (${state.loadCount}).`
+    );
+  }
+  return true;
 }
 
 const workspaceProbeScript = String.raw`(() => {
@@ -553,22 +586,17 @@ export async function runPreviewBrowserAcceptance({
     );
     const workspaceUrl = `${baseUrl}/projects/${projectId}`;
     await page.navigate(workspaceUrl);
-    const iframeLoaded = await waitUntil(
-      () =>
-        page.evaluate(`(() => {
-        const frame = document.querySelector("iframe");
-        return Boolean(frame && frame.src === ${JSON.stringify(previewUrl)} && window.__atomAcceptance?.iframeLoads.includes(frame.src));
-      })()`),
-      { timeoutMs: 30_000, message: "Production workspace iframe did not load." }
-    );
+    const iframeLoaded = await waitUntil(() => workspacePreviewLoaded(page, previewUrl), {
+      timeoutMs: 30_000,
+      message: "Production workspace iframe did not load."
+    });
 
     await browser.connection.send("Page.reload", { ignoreCache: true }, page.sessionId);
     const reloadRestored = await waitUntil(
-      () =>
-        page.evaluate(`(() => {
-        const frame = document.querySelector("iframe");
-        return Boolean(document.readyState === "complete" && frame && frame.src === ${JSON.stringify(previewUrl)} && window.__atomAcceptance?.iframeLoads.includes(frame.src));
-      })()`),
+      async () => {
+        const ready = await page.evaluate("document.readyState === 'complete'");
+        return ready && workspacePreviewLoaded(page, previewUrl);
+      },
       { timeoutMs: 30_000, message: "Preview URL was not restored after workspace reload." }
     );
 

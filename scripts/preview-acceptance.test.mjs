@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  canonicalPreviewUrl,
   formatPreviewAcceptanceReport,
   validatePreviewAcceptanceEvidence
 } from "./preview-acceptance.mjs";
@@ -38,6 +39,13 @@ function evidence(overrides = {}) {
 test("accepts complete browser-level Preview evidence", () => {
   const accepted = validatePreviewAcceptanceEvidence(evidence());
   assert.equal(accepted.restartCompleted, true);
+});
+
+test("canonicalizes an E2B origin with or without its trailing slash", () => {
+  assert.equal(
+    canonicalPreviewUrl("https://5173-example.e2b.app"),
+    canonicalPreviewUrl("https://5173-example.e2b.app/")
+  );
 });
 
 test("requires every Todo interaction and count transition", () => {
