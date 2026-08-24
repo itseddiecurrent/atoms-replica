@@ -211,6 +211,7 @@ export async function getLatestRunForProjectForUser(
     .select({
       id: runs.id,
       status: runs.status,
+      planJson: runs.planJson,
       errorCode: runs.errorCode,
       errorMessage: runs.errorMessage
     })
@@ -234,6 +235,80 @@ export async function getProjectAgentContext(db: Database, projectId: string) {
       .limit(10)
   ]);
   return { files, messages: conversationMessages.reverse() };
+}
+
+export async function getProjectPersistenceEvidenceForUser(
+  db: Database,
+  input: { projectId: string; userId: string }
+) {
+  const [project] = await db
+    .select({
+      id: projects.id,
+      status: projects.status,
+      previewUrl: projects.previewUrl,
+      sandboxId: projects.sandboxId,
+      sandboxExpiresAt: projects.sandboxExpiresAt,
+      latestSnapshotId: projects.latestSnapshotId
+    })
+    .from(projects)
+    .where(and(eq(projects.id, input.projectId), eq(projects.userId, input.userId)))
+    .limit(1);
+  if (!project) return null;
+
+  const [messageRows, runRows, fileRows, snapshotRows, runtimeJobRows] = await Promise.all([
+    db
+      .select({ id: messages.id, role: messages.role, runId: messages.runId })
+      .from(messages)
+      .innerJoin(conversations, eq(messages.conversationId, conversations.id))
+      .where(eq(conversations.projectId, input.projectId))
+      .orderBy(asc(messages.createdAt)),
+    db
+      .select({
+        id: runs.id,
+        triggerMessageId: runs.triggerMessageId,
+        status: runs.status,
+        planJson: runs.planJson,
+        errorCode: runs.errorCode
+      })
+      .from(runs)
+      .where(eq(runs.projectId, input.projectId))
+      .orderBy(asc(runs.createdAt)),
+    db
+      .select({ path: projectFiles.path, version: projectFiles.version })
+      .from(projectFiles)
+      .where(eq(projectFiles.projectId, input.projectId))
+      .orderBy(asc(projectFiles.path)),
+    db
+      .select({ id: snapshots.id, runId: snapshots.runId })
+      .from(snapshots)
+      .where(eq(snapshots.projectId, input.projectId))
+      .orderBy(asc(snapshots.createdAt)),
+    db
+      .select({ id: runtimeJobs.id, type: runtimeJobs.type, status: runtimeJobs.status })
+      .from(runtimeJobs)
+      .where(eq(runtimeJobs.projectId, input.projectId))
+      .orderBy(asc(runtimeJobs.createdAt))
+  ]);
+
+  return {
+    project,
+    messages: messageRows,
+    runs: runRows.map(({ planJson, ...run }) => {
+      const plan =
+        planJson && typeof planJson === "object"
+          ? (planJson as { summary?: unknown; steps?: Array<{ title?: unknown }> })
+          : undefined;
+      return {
+        ...run,
+        hasPlan: planJson !== null,
+        planSummary: typeof plan?.summary === "string" ? plan.summary : null,
+        planStepCount: Array.isArray(plan?.steps) ? plan.steps.length : 0
+      };
+    }),
+    files: fileRows,
+    snapshots: snapshotRows,
+    runtimeJobs: runtimeJobRows
+  };
 }
 
 export async function getUserRateUsage(db: Database, userId: string, now = new Date()) {

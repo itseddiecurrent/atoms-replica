@@ -45,6 +45,20 @@ export default async function ProjectPage({
     projectId: project.id,
     userId: user.id
   });
+  const latestPlan =
+    latestRun?.planJson && typeof latestRun.planJson === "object"
+      ? (latestRun.planJson as {
+          summary?: unknown;
+          steps?: Array<{ title?: unknown }>;
+        })
+      : undefined;
+  const initialPlanSummary =
+    typeof latestPlan?.summary === "string" ? latestPlan.summary : undefined;
+  const initialPlanSteps = Array.isArray(latestPlan?.steps)
+    ? latestPlan.steps
+        .map((step) => step.title)
+        .filter((title): title is string => typeof title === "string")
+    : undefined;
 
   return (
     <Workspace
@@ -55,6 +69,8 @@ export default async function ProjectPage({
       initialRunStatus={latestRun?.status}
       initialRunErrorCode={latestRun?.errorCode ?? undefined}
       initialRunErrorMessage={latestRun?.errorMessage ?? undefined}
+      initialPlanSummary={initialPlanSummary}
+      initialPlanSteps={initialPlanSteps}
       initialFiles={files.map(({ path, version, updatedAt }) => ({ path, version, updatedAt }))}
       messages={messages}
     />

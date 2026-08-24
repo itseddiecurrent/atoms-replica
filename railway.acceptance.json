@@ -13,11 +13,15 @@
       "/scripts/preview-acceptance.test.mjs",
       "/scripts/incremental-smoke.mjs",
       "/scripts/incremental-acceptance.mjs",
-      "/scripts/incremental-acceptance.test.mjs"
+      "/scripts/incremental-acceptance.test.mjs",
+      "/scripts/persistence-smoke.mjs",
+      "/scripts/persistence-acceptance.mjs",
+      "/scripts/persistence-acceptance.test.mjs",
+      "/scripts/persistence-browser.mjs"
     ]
   },
   "deploy": {
-    "startCommand": "node --trace-uncaught --enable-source-maps scripts/incremental-smoke.mjs",
+    "startCommand": "node --trace-uncaught --enable-source-maps scripts/persistence-smoke.mjs",
     "restartPolicyType": "NEVER"
   }
 }

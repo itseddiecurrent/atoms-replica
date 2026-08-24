@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:net";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { loadEnvFile } from "node:process";
 
 import {
@@ -17,6 +22,18 @@ import {
   formatIncrementalAcceptanceReport,
   validateIncrementalAcceptanceEvidence
 } from "./incremental-acceptance.mjs";
+import {
+  formatPersistenceAcceptanceReport,
+  isUnsafeDownloadPath,
+  readStoredZip,
+  validatePersistenceAcceptanceEvidence
+} from "./persistence-acceptance.mjs";
+import {
+  runExpiredSandboxRestoreBrowserAcceptance,
+  runIdeEditBrowserAcceptance,
+  runPersistenceReloginBrowserAcceptance,
+  runStandaloneTodoBrowserAcceptance
+} from "./persistence-browser.mjs";
 
 for (const path of [".env", ".env.test-account"]) {
   try {
@@ -28,7 +45,10 @@ for (const path of [".env", ".env.test-account"]) {
 
 const fixedPrompt = "创建一个带添加、完成和删除功能的 Todo App，并显示未完成数量。";
 const followUpPrompt = "把页面标题改成 Focus Todo，并增加 All、Active、Completed 三个筛选按钮。";
-const acceptanceRunnerRelease = "step7-incremental-modification-v1";
+const acceptanceRunnerRelease =
+  process.env.E2E_PERSISTENCE_ONLY === "true"
+    ? "step8-persistence-recovery-download-v1"
+    : "step7-incremental-modification-v1";
 const baseUrl = productionBaseUrl(required("E2E_BASE_URL"));
 const email = required("E2E_EMAIL");
 const password = required("E2E_PASSWORD");
@@ -39,7 +59,8 @@ const deploySettleMs = Number(
 );
 const initialOnly = process.env.E2E_INITIAL_ONLY === "true";
 const previewOnly = process.env.E2E_PREVIEW_ONLY === "true";
-const incrementalOnly = process.env.E2E_INCREMENTAL_ONLY === "true";
+const persistenceOnly = process.env.E2E_PERSISTENCE_ONLY === "true";
+const incrementalOnly = process.env.E2E_INCREMENTAL_ONLY === "true" || persistenceOnly;
 let projectId;
 let cookie;
 
@@ -199,6 +220,131 @@ async function collectFileEvidence() {
       };
     })
   );
+}
+
+async function collectProjectFiles() {
+  const files = (await jsonRequest(`/api/projects/${projectId}/files`)).body.files;
+  return Promise.all(
+    files.map(async (file) => {
+      const saved = (
+        await jsonRequest(
+          `/api/projects/${projectId}/files/content?path=${encodeURIComponent(file.path)}`
+        )
+      ).body;
+      return { path: file.path, version: saved.version, content: saved.content };
+    })
+  );
+}
+
+async function persistenceState() {
+  return (await jsonRequest(`/api/projects/${projectId}/persistence`)).body;
+}
+
+async function waitForSandboxExpiry(expiresAt) {
+  const graceMs = Number(process.env.E2E_SANDBOX_EXPIRY_GRACE_MS ?? 5_000);
+  const deadline = new Date(expiresAt).getTime() + graceMs;
+  assert.ok(Number.isFinite(deadline), "Project did not record a valid Sandbox expiry.");
+  while (Date.now() < deadline) {
+    const remaining = deadline - Date.now();
+    console.info(
+      `       Waiting for real Sandbox expiry: ${Math.ceil(remaining / 1_000)}s remaining.`
+    );
+    await new Promise((resolve) => setTimeout(resolve, Math.min(remaining, 60_000)));
+  }
+}
+
+function runProcess(command, args, { cwd, timeoutMs = 180_000 } = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd,
+      env: { ...process.env, NODE_ENV: "development" },
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    let output = "";
+    const capture = (chunk) => {
+      output = `${output}${String(chunk)}`.slice(-8_000);
+    };
+    child.stdout.on("data", capture);
+    child.stderr.on("data", capture);
+    const timeout = setTimeout(() => child.kill("SIGTERM"), timeoutMs);
+    child.once("error", reject);
+    child.once("exit", (code, signal) => {
+      clearTimeout(timeout);
+      resolve({ exitCode: code ?? -1, signal, output });
+    });
+  });
+}
+
+async function availablePort() {
+  const server = createServer();
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  const port = typeof address === "object" && address ? address.port : undefined;
+  await new Promise((resolve) => server.close(resolve));
+  assert.ok(port, "Could not reserve a local acceptance port.");
+  return port;
+}
+
+async function validateDownloadedProject(files, marker) {
+  const directory = await mkdtemp(join(tmpdir(), "atom-download-acceptance-"));
+  let server;
+  try {
+    for (const file of files) {
+      assert.equal(isUnsafeDownloadPath(file.path), false, `Unsafe download path: ${file.path}`);
+      const destination = join(directory, file.path);
+      await mkdir(dirname(destination), { recursive: true });
+      await writeFile(destination, file.content, "utf8");
+    }
+    const install = await runProcess("npm", ["install", "--no-audit", "--no-fund"], {
+      cwd: directory
+    });
+    assert.equal(install.exitCode, 0, "Clean downloaded project dependency installation failed.");
+    const build = await runProcess("npm", ["run", "build"], { cwd: directory });
+    assert.equal(build.exitCode, 0, "Clean downloaded project production build failed.");
+    const test = await runProcess("npm", ["test"], { cwd: directory });
+    assert.equal(test.exitCode, 0, "Clean downloaded project tests failed.");
+
+    const port = await availablePort();
+    server = spawn(
+      "npm",
+      ["run", "dev", "--", "--host", "127.0.0.1", "--port", String(port), "--strictPort"],
+      { cwd: directory, env: { ...process.env, NODE_ENV: "development" }, stdio: "ignore" }
+    );
+    const url = `http://127.0.0.1:${port}`;
+    let serverHttpStatus;
+    const deadline = Date.now() + 30_000;
+    while (Date.now() < deadline) {
+      try {
+        const response = await fetch(url, { signal: AbortSignal.timeout(2_000) });
+        serverHttpStatus = response.status;
+        if (response.status === 200) break;
+      } catch {
+        // The clean Vite process may not have bound its port yet.
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    assert.equal(serverHttpStatus, 200, "Downloaded project did not start independently.");
+    const browser = await runStandaloneTodoBrowserAcceptance({ url, marker });
+    return {
+      installExitCode: install.exitCode,
+      buildExitCode: build.exitCode,
+      testExitCode: test.exitCode,
+      serverHttpStatus,
+      ...browser
+    };
+  } finally {
+    if (server) {
+      server.kill("SIGTERM");
+      await Promise.race([
+        new Promise((resolve) => server.once("exit", resolve)),
+        new Promise((resolve) => setTimeout(resolve, 2_000))
+      ]);
+    }
+    await rm(directory, { recursive: true, force: true });
+  }
 }
 
 try {
@@ -363,11 +509,106 @@ try {
           ...browserEvidence
         });
         console.info(formatIncrementalAcceptanceReport(incrementalEvidence));
-        console.info("Cleaning up the incremental acceptance project...");
-        await jsonRequest(`/api/projects/${projectId}`, { method: "DELETE" });
-        projectId = undefined;
-        console.info("Incremental modification production acceptance passed.");
-        process.exitCode = 0;
+        if (persistenceOnly) {
+          console.info("8/10 Verifying reload, logout/login, and complete server recovery...");
+          const beforeExpiry = await persistenceState();
+          const latestPlan = beforeExpiry.runs.find(({ id }) => id === followUp.body.runId);
+          assert.ok(latestPlan?.planSummary, "Follow-up Run did not preserve its plan summary.");
+          const relogin = await runPersistenceReloginBrowserAcceptance({
+            baseUrl,
+            projectId,
+            previewUrl: updated.previewUrl,
+            cookie,
+            email,
+            password,
+            expectedMessages: [fixedPrompt, followUpPrompt],
+            expectedPlanSummary: latestPlan.planSummary
+          });
+          cookie = relogin.cookie;
+          const browser = { ...relogin, cookie: undefined };
+
+          console.info(
+            "9/10 Waiting for expiry, restoring, editing, downloading, and running clean..."
+          );
+          await waitForSandboxExpiry(beforeExpiry.project.sandboxExpiresAt);
+          const restore = await runExpiredSandboxRestoreBrowserAcceptance({
+            baseUrl,
+            projectId,
+            cookie,
+            timeoutMs: Math.min(maxWaitMs, 6 * 60_000)
+          });
+          const restoredPreview = await fetch(restore.previewUrl, {
+            signal: AbortSignal.timeout(30_000)
+          });
+          const restoredBrowser = await runStandaloneTodoBrowserAcceptance({
+            url: restore.previewUrl
+          });
+          const afterRestore = await persistenceState();
+          const marker = "Persistence restored";
+          const ide = await runIdeEditBrowserAcceptance({
+            baseUrl,
+            projectId,
+            previewUrl: restore.previewUrl,
+            cookie,
+            marker,
+            timeoutMs: Math.min(maxWaitMs, 6 * 60_000)
+          });
+          const afterIdeSave = await persistenceState();
+
+          const serverFiles = await collectProjectFiles();
+          const downloadResponse = await fetch(`${baseUrl}/api/projects/${projectId}/download`, {
+            headers: { Cookie: cookie },
+            signal: AbortSignal.timeout(30_000)
+          });
+          assert.equal(downloadResponse.status, 200);
+          const downloadedFiles = readStoredZip(
+            new Uint8Array(await downloadResponse.arrayBuffer())
+          );
+          const unsafePaths = downloadedFiles.map(({ path }) => path).filter(isUnsafeDownloadPath);
+          const serverContents = new Map(serverFiles.map((file) => [file.path, file.content]));
+          const filesMatchServer =
+            downloadedFiles.length === serverFiles.length &&
+            downloadedFiles.every((file) => serverContents.get(file.path) === file.content);
+          const clean = await validateDownloadedProject(downloadedFiles, marker);
+          const persistenceEvidence = validatePersistenceAcceptanceEvidence({
+            projectId,
+            initialRunId: created.body.runId,
+            followUpRunId: followUp.body.runId,
+            initialSnapshotId,
+            followUpSnapshotId,
+            browser,
+            beforeExpiry,
+            afterRestore,
+            afterIdeSave,
+            restore: {
+              ...restore,
+              previewHttpStatus: restoredPreview.status,
+              incrementalResultVisible:
+                restoredBrowser.interactions.titleVisible &&
+                restoredBrowser.interactions.filtersVisible
+            },
+            ide,
+            download: {
+              filesMatchServer,
+              fileCount: downloadedFiles.length,
+              unsafePaths,
+              ...clean
+            },
+            expectedInteractions: incrementalEvidence.interactions
+          });
+          console.info(formatPersistenceAcceptanceReport(persistenceEvidence));
+          console.info("10/10 Cleaning up the persistence acceptance project...");
+          await jsonRequest(`/api/projects/${projectId}`, { method: "DELETE" });
+          projectId = undefined;
+          console.info("Persistence, recovery, and download production acceptance passed.");
+          process.exitCode = 0;
+        } else {
+          console.info("Cleaning up the incremental acceptance project...");
+          await jsonRequest(`/api/projects/${projectId}`, { method: "DELETE" });
+          projectId = undefined;
+          console.info("Incremental modification production acceptance passed.");
+          process.exitCode = 0;
+        }
       } else {
         console.info("7/10 Testing manual edit synchronization through the Worker...");
         const files = (await jsonRequest(`/api/projects/${projectId}/files`)).body.files;

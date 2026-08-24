@@ -40,6 +40,8 @@ type WorkspaceProps = {
   initialRunStatus?: string | undefined;
   initialRunErrorCode?: string | undefined;
   initialRunErrorMessage?: string | undefined;
+  initialPlanSummary?: string | undefined;
+  initialPlanSteps?: string[] | undefined;
   initialFiles?: Array<{ path: string; version: number; updatedAt: Date }>;
   runId?: string | undefined;
   messages?: Array<{
@@ -71,6 +73,8 @@ export function Workspace({
   initialRunStatus,
   initialRunErrorCode,
   initialRunErrorMessage,
+  initialPlanSummary,
+  initialPlanSteps,
   initialFiles = [],
   runId,
   messages = []
@@ -117,12 +121,12 @@ export function Workspace({
   const [retryPrompt, setRetryPrompt] = useState<string | null>(null);
   const [liveEvents, setLiveEvents] = useState<ActivityItem[]>([]);
   const [runProgress, setRunProgress] = useState(() => initialProgressForStatus(initialRunStatus));
-  const [planSummary, setPlanSummary] = useState("Implementation plan");
-  const [planSteps, setPlanSteps] = useState([
-    "Understand your idea",
-    "Prepare project files",
-    "Validate the preview"
-  ]);
+  const [planSummary, setPlanSummary] = useState(initialPlanSummary ?? "Implementation plan");
+  const [planSteps, setPlanSteps] = useState(
+    initialPlanSteps?.length
+      ? initialPlanSteps
+      : ["Understand your idea", "Prepare project files", "Validate the preview"]
+  );
   const seenEventIds = useRef(new Set<number>());
   const localActivityId = useRef(0);
 

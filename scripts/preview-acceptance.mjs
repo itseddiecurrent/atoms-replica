@@ -115,7 +115,7 @@ class CdpConnection {
   }
 }
 
-async function launchBrowser({
+export async function launchBrowser({
   executablePath = resolveBrowserExecutable(),
   timeoutMs = 20_000
 } = {}) {
@@ -188,7 +188,7 @@ async function launchBrowser({
   };
 }
 
-async function createPage(connection) {
+export async function createPage(connection) {
   const { targetId } = await connection.send("Target.createTarget", { url: "about:blank" });
   const { sessionId } = await connection.send("Target.attachToTarget", {
     targetId,
@@ -230,7 +230,7 @@ async function createPage(connection) {
   };
 }
 
-async function waitUntil(
+export async function waitUntil(
   check,
   { timeoutMs = 15_000, intervalMs = 150, message = "Condition timed out." } = {}
 ) {
@@ -457,7 +457,7 @@ const todoInteractionScript = String.raw`(async () => {
   };
 })()`;
 
-const incrementalInteractionScript = String.raw`(async () => {
+export const incrementalInteractionScript = String.raw`(async () => {
   const pause = (ms = 120) => new Promise((resolve) => setTimeout(resolve, ms));
   const visible = (element) => {
     const style = getComputedStyle(element);

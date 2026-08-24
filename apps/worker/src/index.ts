@@ -233,11 +233,39 @@ if (mode === "disabled") {
           "Could not synchronize the saved file into the Sandbox.",
           () => prepared.sandbox.writeFile(file.path, file.content)
         );
+        const build = await runtimeJobStage(
+          "RUNTIME_FILE_BUILD_FAILED",
+          "Could not rebuild the Preview after saving the file.",
+          () =>
+            prepared.sandbox.runCommand(SANDBOX_BUILD_COMMAND, {
+              timeoutMs: Number(env.MAX_COMMAND_DURATION_SECONDS) * 1_000
+            })
+        );
+        if (build.exitCode !== 0)
+          throw new RuntimeJobProcessingError(
+            "RUNTIME_FILE_BUILD_FAILED",
+            "The saved file did not pass the production build."
+          );
+        await runtimeJobStage(
+          "RUNTIME_FILE_PREVIEW_RESTART_FAILED",
+          "Could not restart the Preview after saving the file.",
+          () => prepared.sandbox.restartDevServer({ port: Number(env.E2B_PREVIEW_PORT) })
+        );
+        const previewUrl = await runtimeJobStage(
+          "RUNTIME_FILE_PREVIEW_URL_FAILED",
+          "Could not restore the Preview URL after saving the file.",
+          () => prepared.sandbox.getPreviewUrl(Number(env.E2B_PREVIEW_PORT))
+        );
+        await runtimeJobStage(
+          "PREVIEW_SAVE_FAILED",
+          "Could not save the rebuilt Preview URL.",
+          () => saveProjectPreview(database.db, { projectId: job.projectId, previewUrl })
+        );
         return {
           operation: "sync_file",
           path: file.path,
           version: file.version,
-          previewUrl: prepared.previewUrl ?? null
+          previewUrl
         };
       }
       if (!prepared.created) {
