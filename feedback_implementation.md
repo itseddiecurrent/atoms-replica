@@ -252,7 +252,7 @@
 - 下载 ZIP 与最终服务端全部 Project Files 精确一致，不含 `.env`、`node_modules`、`dist`、缓存、coverage 或 Git 数据；在全新临时目录中的 `npm install`、production build、tests、独立 Vite server 和 Chromium Todo 交互全部通过。最终 Validator 同时确认 Messages、Runs、Project Files、Snapshots、latest pointer 与 Runtime Jobs 无缺失引用或活动孤儿状态，Runner 输出 `Persistence, recovery, and download production acceptance passed.`。
 - Runner 随后自动删除临时 Project；特权只读复核确认 Project、Runs、Messages、Snapshots、Project Files 和 Runtime Jobs 均为 0 条残留。按精确 Project/Run 前缀识别并删除两个已无数据库引用的私有 Snapshot ZIP（93,415 与 95,966 bytes）后，该 Storage prefix 为空；E2B Sandbox 继续受真实 TTL 自动释放。至此 Step 8 的跨会话持久化、过期恢复、IDE 同步、下载独立运行、引用一致性与资源清理证据全部齐全，正式通过。
 
-### Step 9：执行自动化生产 Smoke 与故障场景 ⬜ 待完成
+### Step 9：执行自动化生产 Smoke 与故障场景 ✅ 已完成
 
 1. 使用专用测试账号对公开 URL 执行已有生产 smoke 流程，并保存完整结果。
 2. 覆盖 SSE 断线重连，确认事件可以从 `Last-Event-ID` 恢复且不重复。
@@ -264,6 +264,18 @@
 8. 测试结束后清理自动化创建的临时项目和资源。
 
 验收标准：自动化生产 smoke 全部通过；关键失败路径有正确终态、错误分类和恢复操作；不存在越权访问或残留运行资源。
+
+#### 完成总结
+
+- 已新增 `pnpm test:production-smoke` 公开生产 Gate，并将脱敏证据 Validator 接入根级 `pnpm test` 和一次性 Railway Runner；真实 Todo 生成继续复用 Step 5 的严格事件、文件、独立安装/build、HTTPS Preview 与完成摘要校验，不以模拟结果代替生产调用。
+- SSE Gate 会在首个 durable event 后主动断开并使用 `Last-Event-ID` 恢复，同时能继续处理 Railway 的额外传输中断；最终记录要求 event ID 严格递增且不重复。本轮成功 Run 跨强制重连收到 71 个唯一事件。
+- 取消验收只在 Worker 已发布 `run.planning` 后发起。数据库 Run 与 `run.cancelled` 事件现均持久化 `RUN_CANCELLED`；Gate 在终态后再次等待并比较文件路径/版本，要求不再写文件且不得产生 Snapshot。
+- Gate 会创建一次性第二 Firebase 账号，对 Project 页面、Files、File Content、Download、Persistence、Messages、Events、Cancel、Preview Restart、Runtime Job 和 Delete 共 11 个边界执行越权请求；API 必须返回 404，Next.js 流式 not-found 页面只在正文明确为 404 且不含 Project 数据时归一化为拒绝。相同 signed-out 请求必须返回 401 或认证跳转，测试后立即删除第二账号。
+- token、轮次、工具调用、Coder 时长、Run 总时长和 build 非零退出采用确定性 Release-gate 故障测试：token/turn/tool-call 均签收为 `AI_LIMIT`，Coder/Run duration 均签收为 `RUN_TIMEOUT`，build 保留真实 exit code 与 stderr 并签收为 `BUILD_FAILED`，不会依赖模型是否恰好触发限制。
+- 修复了删除 Project 只级联数据库、却遗留 E2B Sandbox 和私有 Snapshot ZIP 的资源泄漏：Web 现只创建不含服务凭据的 durable cleanup job，Worker 使用 E2B/Supabase 凭据删除精确 Sandbox 与 Snapshot keys；删除 API 返回可轮询 cleanup job，活跃 Run/Runtime Job 时拒绝删除，Runner 成功和异常 `finally` 都会取消、重试删除并等待 cleanup 完成。
+- 已新增受信维护机的只读 `pnpm test:production-resources`：将数据库及进行中 cleanup 引用与私有 Storage/E2B 账户交叉比对，只输出数量。显式维护模式清理了此前旧版本验收遗留的 28 个无引用 Snapshot ZIP；随后只读复核为 stale Runs 0、stale Runtime Jobs 0、stale cleanup jobs 0、Snapshot objects 0、active E2B Sandboxes 0。
+- 目标 Web/Worker commit `6af8d03b1ac6d9ec3de18e7a6f50467d48f92754` 的 GitHub Actions Run `32736663205` 成功，公开 URL 健康且数据库为 `ok`。最终 `Automated Production Smoke and Fault Acceptance Record` 生成于 `2026-08-24T14:32:02.825Z`：完成 Project `3b5cdde5-1c99-4608-948d-c5d8f5871a38` / Run `6051bc84-7b85-4a84-af72-5882b3dc2cda` 保存 13 个文件、Preview HTTP 200、ZIP 92,346 bytes；取消 Project `f36ed46c-a0c2-4d45-9be3-1ec1162e23b9` / Run `6b52b9e3-288b-42dd-a565-a651ec7a2774` 正确进入 `RUN_CANCELLED`。
+- 两个最终验收 Project 的 durable cleanup jobs 均完成，Dashboard 不再包含其 ID，第二测试账号已删除；最终全局资源复核时间为 `2026-08-24T14:32:33.915Z`。Runner 的额外断线恢复、失败清理和数量化资源审计固化于 commit `5d580de`，至此 Step 9 的生产 Smoke、关键故障分类、越权隔离和资源清理证据全部齐全，正式通过。
 
 ### Step 10：整理证据并完成反馈签收 ⬜ 待完成
 
