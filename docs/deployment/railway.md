@@ -62,7 +62,7 @@ the production baseline is `200000`. Keep both variables on the Worker only.
 
 - Config-as-code path: `/railway.acceptance.json`
 - Build: the dedicated Node 24/Chromium `/Dockerfile.acceptance` plus syntax and evidence tests
-- Start: `E2E_PREVIEW_ONLY=true node scripts/live-smoke.mjs`
+- Start: `node scripts/preview-smoke.mjs`
 - Restart policy: `NEVER`
 - Public networking: disabled
 - Variables: copy names from `deploy/acceptance.env.example`

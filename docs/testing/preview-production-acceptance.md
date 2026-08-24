@@ -40,8 +40,9 @@ terminal or use the Railway runner below.
 ## Railway acceptance runner
 
 The temporary `acceptance-runner` uses `/railway.acceptance.json`. Its dedicated
-`Dockerfile.acceptance` installs Chromium in a Node 24 image and runs the same browser Gate once with
-`restartPolicyType: NEVER`. Configure only:
+`Dockerfile.acceptance` installs Chromium in a Node 24 image and starts `scripts/preview-smoke.mjs`,
+which selects Preview-only mode without relying on shell environment-assignment syntax. It runs the
+same browser Gate once with `restartPolicyType: NEVER`. Configure only:
 
 | Variable               | Purpose                             |
 | ---------------------- | ----------------------------------- |

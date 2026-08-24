@@ -6,6 +6,7 @@
     "watchPatterns": [
       "/Dockerfile.acceptance",
       "/scripts/live-smoke.mjs",
+      "/scripts/preview-smoke.mjs",
       "/scripts/first-generation-evidence.mjs",
       "/scripts/first-generation-evidence.test.mjs",
       "/scripts/preview-acceptance.mjs",
@@ -13,7 +14,7 @@
     ]
   },
   "deploy": {
-    "startCommand": "E2E_PREVIEW_ONLY=true node scripts/live-smoke.mjs",
+    "startCommand": "node scripts/preview-smoke.mjs",
     "restartPolicyType": "NEVER"
   }
 }

@@ -25,7 +25,7 @@
     "test:generation": "E2E_INITIAL_ONLY=true node scripts/live-smoke.mjs",
     "test:openai:readiness": "node --env-file-if-exists=.env scripts/openai-readiness.mjs",
     "test:openai-readiness": "node --test scripts/openai-readiness.test.mjs",
-    "test:preview": "E2E_PREVIEW_ONLY=true node scripts/live-smoke.mjs",
+    "test:preview": "node scripts/preview-smoke.mjs",
     "test:preview-evidence": "node --test scripts/preview-acceptance.test.mjs",
     "test:production-baseline": "node --test scripts/production-baseline.test.mjs",
     "test:security-scan": "node --test scripts/secret-scan-rules.test.mjs",

@@ -10,7 +10,8 @@ WORKDIR /app
 COPY scripts ./scripts
 
 RUN node --check scripts/live-smoke.mjs \
+  && node --check scripts/preview-smoke.mjs \
   && node --check scripts/preview-acceptance.mjs \
   && node --test scripts/first-generation-evidence.test.mjs scripts/preview-acceptance.test.mjs
 
-CMD ["node", "scripts/live-smoke.mjs"]
+CMD ["node", "scripts/preview-smoke.mjs"]
