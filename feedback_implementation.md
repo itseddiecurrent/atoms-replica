@@ -122,7 +122,7 @@
 - 新增 6 条专项测试，覆盖完整远程生命周期、敏感信息隔离、限制/CSP 校验、Credits/并发确认、CSP 不匹配清理以及 Node/npm 失败诊断与清理。
 - 当前受控开发执行环境禁止外部 DNS，因此每次部署后的真实 E2B 探针必须按文档从可信本机或可出网 CI 运行；其输出即为该版本的 Runtime 与额度验收证据。
 
-### Step 5：验收线上首次真实生成 🟡 验收中
+### Step 5：验收线上首次真实生成 ✅ 已完成
 
 1. 使用专用测试账号在公开 URL 创建一个全新项目。
 2. 使用固定 Prompt：`创建一个带添加、完成和删除功能的 Todo App，并显示未完成数量。`
@@ -152,6 +152,7 @@
 - 针对该失败，Sandbox Preview 改为直接启动已安装的 Vite 二进制，固定 `0.0.0.0` 并启用 `--strictPort`，同时保留后台进程句柄、限制单次公网探测时间，并在失败时报告 Sandbox 内部 HTTP 探测、进程退出码和受长度限制的启动日志。部署后必须由 Railway Runner 重新获得 `run.completed`、HTTPS Preview 和完整证据记录，才能将本步骤标记为完成。
 - 上述诊断随后确认 E2B 默认 Template 实际为 Node 20.9.0，而 Vite 7 dev server 要求 Node 20.19+，因此 production build 虽通过，Preview 仍会在依赖优化阶段因缺少 `crypto.hash` 退出。Preview 已进一步改为使用 Node 内置 HTTP 模块直接服务独立验证后的 `dist`，不再让生产 Preview 依赖 Vite dev runtime 或更高 Node minor；同一端口上的旧 Preview 会在启动前确定性停止。
 - Preview 修复后的线上 Run 已到达 95% 文件/Snapshot 保存，但暴露出文件枚举先递归整个 `node_modules` 和 `dist`、再执行归档过滤的远程调用放大问题。Sandbox 文件树现已在递归入口剪枝依赖、构建、缓存、Git、coverage 和 `.env` 路径，只枚举并持久化真实项目源码。
+- 最终 Railway 验收由 Runner commit `6afe731e4a6bf5023e002804fc34d94f169e4a07` 执行，目标 Web/Worker 修复版本为 `813423b24adfd8e40ab720a9982cd98ea51241d6`。固定中文 Todo Prompt 的真实 Run 成功保存 13 个项目文件，独立依赖安装、production build 和模型执行的测试均通过，HTTPS Preview 在线，明确完成摘要与 `First Production Generation Record` 已保存在 Runner Deploy Logs；临时验收 Project 随后自动清理，Step 5 正式通过。
 
 ### Step 6：验收 Preview 首次启动与交互 ⬜ 待完成
 
