@@ -67,9 +67,17 @@ integration("Supabase data layer", () => {
       content: "export const App = () => <main />;",
       updatedBy: "user"
     });
+    const unchangedFile = await upsertProjectFile(database.db, {
+      projectId: ids.projectId,
+      path: "src/App.tsx",
+      content: "export const App = () => <main />;",
+      updatedBy: "agent"
+    });
 
     expect(firstFile.version).toBe(1);
     expect(secondFile.version).toBe(2);
+    expect(unchangedFile.version).toBe(2);
+    expect(unchangedFile.updatedBy).toBe("user");
 
     const snapshot = await createSnapshot(database.db, {
       projectId: ids.projectId,

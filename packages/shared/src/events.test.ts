@@ -9,10 +9,15 @@ describe("runEventSchema", () => {
       runId: "550e8400-e29b-41d4-a716-446655440000",
       timestamp: "2026-08-22T00:00:00.000Z",
       type: "run.completed",
-      payload: { summary: "Done" }
+      payload: {
+        summary: "Done",
+        snapshotId: "55555555-5555-4555-8555-555555555555"
+      }
     });
 
     expect(event.type).toBe("run.completed");
+    if (event.type === "run.completed")
+      expect(event.payload.snapshotId).toBe("55555555-5555-4555-8555-555555555555");
   });
 
   it("rejects a malformed event", () => {

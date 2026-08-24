@@ -835,12 +835,26 @@ export async function upsertProjectFile(
         updatedBy: input.updatedBy,
         updatedAt: new Date(),
         version: sql`${projectFiles.version} + 1`
-      }
+      },
+      setWhere: sql`${projectFiles.contentHash} is distinct from ${contentHash}`
     })
     .returning();
 
-  if (!file) throw new Error("Failed to upsert project file.");
-  return file;
+  if (file) return file;
+
+  const [unchanged] = await db
+    .select()
+    .from(projectFiles)
+    .where(
+      and(
+        eq(projectFiles.projectId, input.projectId),
+        eq(projectFiles.path, input.path),
+        eq(projectFiles.contentHash, contentHash)
+      )
+    )
+    .limit(1);
+  if (!unchanged) throw new Error("Failed to upsert project file.");
+  return unchanged;
 }
 
 export async function deleteProjectFile(db: Database, input: { projectId: string; path: string }) {

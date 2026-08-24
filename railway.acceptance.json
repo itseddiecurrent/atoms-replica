@@ -10,11 +10,14 @@
       "/scripts/first-generation-evidence.mjs",
       "/scripts/first-generation-evidence.test.mjs",
       "/scripts/preview-acceptance.mjs",
-      "/scripts/preview-acceptance.test.mjs"
+      "/scripts/preview-acceptance.test.mjs",
+      "/scripts/incremental-smoke.mjs",
+      "/scripts/incremental-acceptance.mjs",
+      "/scripts/incremental-acceptance.test.mjs"
     ]
   },
   "deploy": {
-    "startCommand": "node --trace-uncaught --enable-source-maps scripts/preview-smoke.mjs",
+    "startCommand": "node --trace-uncaught --enable-source-maps scripts/incremental-smoke.mjs",
     "restartPolicyType": "NEVER"
   }
 }

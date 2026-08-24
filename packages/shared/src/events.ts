@@ -92,7 +92,8 @@ export const runEventSchema = z.discriminatedUnion("type", [
       summary: z.string(),
       filesPersisted: z.number().int().nonnegative().optional(),
       previewUrl: z.url().optional(),
-      validationCommands: z.array(z.string()).optional()
+      validationCommands: z.array(z.string()).optional(),
+      snapshotId: z.uuid().optional()
     })
   }),
   z.object({

@@ -457,6 +457,162 @@ const todoInteractionScript = String.raw`(async () => {
   };
 })()`;
 
+const incrementalInteractionScript = String.raw`(async () => {
+  const pause = (ms = 120) => new Promise((resolve) => setTimeout(resolve, ms));
+  const visible = (element) => {
+    const style = getComputedStyle(element);
+    const box = element.getBoundingClientRect();
+    return style.visibility !== "hidden" && style.display !== "none" && box.width > 0 && box.height > 0;
+  };
+  const text = (element) => (element.innerText || element.textContent || "").trim();
+  const all = (selector) => [...document.querySelectorAll(selector)].filter(visible);
+  const waitFor = async (check, message) => {
+    for (let index = 0; index < 60; index += 1) {
+      const value = check();
+      if (value) return value;
+      await pause();
+    }
+    throw new Error(message);
+  };
+  const input = all('input:not([type]), input[type="text"], input[type="search"], textarea')
+    .find((element) => !element.disabled && !element.readOnly);
+  if (!input) throw new Error("Incremental Todo Preview has no visible text input.");
+  const form = input.closest("form");
+  const buttons = () => all('button, [role="button"], input[type="submit"]');
+  const namedButton = (name) => buttons().find((element) =>
+    new RegExp("^" + name + "$", "i").test(text(element) || element.getAttribute("aria-label") || element.title || element.value || "")
+  );
+  const addButton = () => {
+    const scoped = form ? [...form.querySelectorAll('button, [role="button"], input[type="submit"]')].filter(visible) : [];
+    return [...scoped, ...buttons()].find((element) => /^(add|create|new|添加|新增|创建)(\s|$)/i.test(text(element) || element.getAttribute("aria-label") || element.title || element.value || ""));
+  };
+  const setInput = (value) => {
+    const prototype = input instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    Object.getOwnPropertyDescriptor(prototype, "value").set.call(input, value);
+    input.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: value }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  };
+  const submit = async () => {
+    await pause();
+    const button = addButton();
+    if (button) button.click();
+    else if (form?.requestSubmit) form.requestSubmit();
+    else input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true }));
+    await pause(300);
+  };
+  const remainingLine = (expected) => {
+    const label = "remaining|left|incomplete|active|pending|outstanding|open|to do|todo|未完成|剩余|还剩|还有|待完成|待办";
+    const lines = document.body.innerText.split(/\n+/).map((line) => line.trim()).filter(Boolean);
+    const accessible = all("[aria-label], [title]").flatMap((element) =>
+      [element.getAttribute("aria-label"), element.title].filter(Boolean)
+    );
+    return [...lines, ...accessible].find((line) =>
+      new RegExp("(^|\\D)" + expected + "(\\D|$)").test(line) && new RegExp(label, "i").test(line)
+    );
+  };
+  const itemContainer = (value, includeHidden = false) => {
+    const elements = [...document.querySelectorAll("body *")];
+    const leaf = elements.find((element) =>
+      (includeHidden || visible(element)) && [...element.childNodes].some((node) => node.nodeType === Node.TEXT_NODE && node.textContent.trim() === value)
+    );
+    if (!leaf) return undefined;
+    return leaf.closest('li, [role="listitem"], article') || [leaf, leaf.parentElement, leaf.parentElement?.parentElement, leaf.parentElement?.parentElement?.parentElement]
+      .find((element) => element && element.querySelector('input[type="checkbox"], button, [role="checkbox"], [role="button"]')) || leaf.parentElement;
+  };
+  const itemVisible = (value) => {
+    const container = itemContainer(value, true);
+    return Boolean(container && visible(container));
+  };
+  const toggle = async (value) => {
+    const container = itemContainer(value);
+    if (!container) throw new Error("Todo item " + value + " was not rendered.");
+    const controls = [...container.querySelectorAll('input[type="checkbox"], [role="checkbox"], button, [role="button"]')].filter(visible);
+    const control = controls.find((element) => {
+      if (element.matches('input[type="checkbox"], [role="checkbox"]')) return true;
+      return /(complete|done|toggle|check|完成|勾选)/i.test(text(element) || element.getAttribute("aria-label") || element.title || "");
+    }) || (controls.length > 1 ? controls[0] : undefined);
+    if (!control) throw new Error("Todo item " + value + " has no completion control.");
+    control.click();
+    await pause(300);
+  };
+  const remove = async (value) => {
+    const container = itemContainer(value);
+    if (!container) throw new Error("Todo item " + value + " was not rendered.");
+    const controls = [...container.querySelectorAll('button, [role="button"]')].filter(visible);
+    const control = controls.find((element) => /(delete|remove|trash|删除|移除)/i.test(text(element) || element.getAttribute("aria-label") || element.title || "")) || controls.at(-1);
+    if (!control) throw new Error("Todo item " + value + " has no delete control.");
+    control.click();
+    await pause(300);
+  };
+  const clearExistingTodos = async () => {
+    for (let index = 0; index < 50; index += 1) {
+      const labeled = buttons().find((element) => /(delete|remove|trash|删除|移除)/i.test(text(element) || element.getAttribute("aria-label") || element.title || ""));
+      const container = all('li, [role="listitem"]').find((element) => element.querySelector('button, [role="button"]'));
+      const controls = container ? [...container.querySelectorAll('button, [role="button"]')].filter(visible) : [];
+      const fallback = controls.length > 1 ? controls.at(-1) : undefined;
+      const control = labeled || fallback;
+      if (!control) return;
+      control.click();
+      await pause(250);
+    }
+    throw new Error("Todo Preview seed items could not be cleared.");
+  };
+
+  const filterAll = namedButton("All");
+  const filterActive = namedButton("Active");
+  const filterCompleted = namedButton("Completed");
+  const titleVisible = document.body.innerText.includes("Focus Todo");
+  const filtersVisible = Boolean(filterAll && filterActive && filterCompleted);
+  if (!titleVisible || !filtersVisible) throw new Error("Follow-up title or filter controls are missing.");
+  filterAll.click();
+  await pause();
+  await clearExistingTodos();
+
+  const first = "Incremental acceptance alpha";
+  const second = "Incremental acceptance beta";
+  setInput("");
+  await submit();
+  const emptyRejected = Boolean(remainingLine(0)) && input.value.trim() === "";
+  setInput(first);
+  await submit();
+  await waitFor(() => itemVisible(first), "First incremental Todo was not added.");
+  setInput(second);
+  await submit();
+  await waitFor(() => itemVisible(second), "Second incremental Todo was not added.");
+  const countAfterAdd = await waitFor(() => remainingLine(2), "Remaining count did not reach two.");
+  await toggle(first);
+  const countAfterComplete = await waitFor(() => remainingLine(1), "Remaining count did not decrease.");
+
+  filterActive.click();
+  await pause(300);
+  const activeFilterPassed = !itemVisible(first) && itemVisible(second);
+  filterCompleted.click();
+  await pause(300);
+  const completedFilterPassed = itemVisible(first) && !itemVisible(second);
+  filterAll.click();
+  await pause(300);
+  const allFilterPassed = itemVisible(first) && itemVisible(second);
+
+  await toggle(first);
+  const countAfterRestore = await waitFor(() => remainingLine(2), "Remaining count did not increase after restore.");
+  await remove(second);
+  await waitFor(() => !itemVisible(second), "Deleted Todo remained visible.");
+  const countAfterDelete = remainingLine(1);
+  return {
+    titleVisible,
+    filtersVisible,
+    emptyRejected,
+    twoAdded: itemVisible(first) && Boolean(countAfterAdd),
+    completePassed: Boolean(countAfterComplete),
+    activeFilterPassed,
+    completedFilterPassed,
+    allFilterPassed,
+    restorePassed: Boolean(countAfterRestore),
+    deletePassed: !itemVisible(second),
+    countSequencePassed: Boolean(countAfterAdd && countAfterComplete && countAfterRestore && countAfterDelete)
+  };
+})()`;
+
 export function validatePreviewAcceptanceEvidence(evidence) {
   assert.match(evidence.projectId, /^[0-9a-f-]{36}$/i, "Project ID must be recorded.");
   assert.match(evidence.runId, /^[0-9a-f-]{36}$/i, "Run ID must be recorded.");
@@ -518,6 +674,101 @@ export async function probePreviewBrowser(executablePath) {
       "document.title === 'Atom Preview Probe' && document.querySelector('main')?.textContent === 'ready'"
     );
   } finally {
+    await page.close().catch(() => undefined);
+    await browser.close();
+  }
+}
+
+export async function runIncrementalPreviewBrowserAcceptance({
+  baseUrl,
+  projectId,
+  previewUrl,
+  cookie,
+  expectedMessages,
+  executablePath
+}) {
+  const browser = await launchBrowser({ ...(executablePath ? { executablePath } : {}) });
+  const page = await createPage(browser.connection);
+  const securityErrors = [];
+  const mutationRequests = [];
+  const removeListeners = [
+    browser.connection.on(
+      "Network.loadingFailed",
+      (event) => {
+        if (
+          ["csp", "mixed-content", "origin"].some((term) =>
+            String(event.blockedReason ?? "")
+              .toLowerCase()
+              .includes(term)
+          )
+        ) {
+          securityErrors.push(event.blockedReason);
+        }
+      },
+      page.sessionId
+    ),
+    browser.connection.on(
+      "Log.entryAdded",
+      ({ entry }) => {
+        if (
+          entry?.level === "error" &&
+          /(content security policy|mixed content|refused to frame|blocked by)/i.test(
+            entry.text ?? ""
+          )
+        ) {
+          securityErrors.push("browser-security-error");
+        }
+      },
+      page.sessionId
+    ),
+    browser.connection.on(
+      "Network.requestWillBeSent",
+      ({ request }) => {
+        if (
+          new URL(request.url).origin === new URL(previewUrl).origin &&
+          ["POST", "PUT", "PATCH", "DELETE"].includes(request.method)
+        ) {
+          mutationRequests.push(request.method);
+        }
+      },
+      page.sessionId
+    )
+  ];
+
+  try {
+    const [cookieName, ...cookieValue] = cookie.split("=");
+    await browser.connection.send(
+      "Network.setCookie",
+      {
+        name: cookieName,
+        value: cookieValue.join("="),
+        domain: new URL(baseUrl).hostname,
+        path: "/",
+        secure: true,
+        httpOnly: true,
+        sameSite: "Lax"
+      },
+      page.sessionId
+    );
+    await page.navigate(`${baseUrl}/projects/${projectId}`);
+    const conversationPersisted = await waitUntil(
+      () =>
+        page.evaluate(`(() => {
+          const expected = ${JSON.stringify(expectedMessages)};
+          return expected.every((message) => document.body.innerText.includes(message));
+        })()`),
+      { timeoutMs: 30_000, message: "Workspace did not restore both user prompts." }
+    );
+    await page.navigate(previewUrl);
+    const interactions = await page.evaluate(incrementalInteractionScript);
+    return {
+      conversationPersisted: Boolean(conversationPersisted),
+      interactions,
+      browserSecurityErrors: securityErrors.length,
+      previewMutationRequests: mutationRequests.length
+    };
+  } finally {
+    removeListeners.forEach((remove) => remove());
     await page.close().catch(() => undefined);
     await browser.close();
   }

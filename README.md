@@ -62,6 +62,8 @@ For a read-only prerequisite check:
   [`docs/testing/manual-production-smoke.md`](./docs/testing/manual-production-smoke.md)
 - Preview production acceptance:
   [`docs/testing/preview-production-acceptance.md`](./docs/testing/preview-production-acceptance.md)
+- Incremental modification production acceptance:
+  [`docs/testing/incremental-production-acceptance.md`](./docs/testing/incremental-production-acceptance.md)
 
 Railway deploys this monorepo as two services from `main`:
 

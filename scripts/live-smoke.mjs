@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { loadEnvFile } from "node:process";
 
 import {
@@ -9,8 +10,13 @@ import {
 } from "./first-generation-evidence.mjs";
 import {
   formatPreviewAcceptanceReport,
+  runIncrementalPreviewBrowserAcceptance,
   runPreviewBrowserAcceptance
 } from "./preview-acceptance.mjs";
+import {
+  formatIncrementalAcceptanceReport,
+  validateIncrementalAcceptanceEvidence
+} from "./incremental-acceptance.mjs";
 
 for (const path of [".env", ".env.test-account"]) {
   try {
@@ -21,7 +27,8 @@ for (const path of [".env", ".env.test-account"]) {
 }
 
 const fixedPrompt = "创建一个带添加、完成和删除功能的 Todo App，并显示未完成数量。";
-const acceptanceRunnerRelease = "step6-browser-preview-interaction-v11";
+const followUpPrompt = "把页面标题改成 Focus Todo，并增加 All、Active、Completed 三个筛选按钮。";
+const acceptanceRunnerRelease = "step7-incremental-modification-v1";
 const baseUrl = productionBaseUrl(required("E2E_BASE_URL"));
 const email = required("E2E_EMAIL");
 const password = required("E2E_PASSWORD");
@@ -32,6 +39,7 @@ const deploySettleMs = Number(
 );
 const initialOnly = process.env.E2E_INITIAL_ONLY === "true";
 const previewOnly = process.env.E2E_PREVIEW_ONLY === "true";
+const incrementalOnly = process.env.E2E_INCREMENTAL_ONLY === "true";
 let projectId;
 let cookie;
 
@@ -175,6 +183,24 @@ async function waitForRuntimeJob(runtimeJobId) {
   throw new Error(`Runtime job ${runtimeJobId} timed out.`);
 }
 
+async function collectFileEvidence() {
+  const files = (await jsonRequest(`/api/projects/${projectId}/files`)).body.files;
+  return Promise.all(
+    files.map(async (file) => {
+      const saved = (
+        await jsonRequest(
+          `/api/projects/${projectId}/files/content?path=${encodeURIComponent(file.path)}`
+        )
+      ).body;
+      return {
+        path: file.path,
+        version: saved.version,
+        contentHash: createHash("sha256").update(saved.content).digest("hex")
+      };
+    })
+  );
+}
+
 try {
   console.info(`Acceptance runner release: ${acceptanceRunnerRelease}`);
   console.info(
@@ -259,70 +285,130 @@ try {
     projectId = undefined;
     console.info("First production generation acceptance passed.");
   } else {
-    console.info("5/10 Exercising Preview interactions, reload recovery, CSP, and UI restart...");
-    const previewEvidence = await runPreviewBrowserAcceptance({
-      baseUrl,
-      projectId,
-      runId: created.body.runId,
-      previewUrl: initial.previewUrl,
-      cookie,
-      restartTimeoutMs: Math.min(maxWaitMs, 6 * 60_000)
-    });
-    console.info(formatPreviewAcceptanceReport(previewEvidence));
-
     if (previewOnly) {
+      console.info("5/10 Exercising Preview interactions, reload recovery, CSP, and UI restart...");
+      const previewEvidence = await runPreviewBrowserAcceptance({
+        baseUrl,
+        projectId,
+        runId: created.body.runId,
+        previewUrl: initial.previewUrl,
+        cookie,
+        restartTimeoutMs: Math.min(maxWaitMs, 6 * 60_000)
+      });
+      console.info(formatPreviewAcceptanceReport(previewEvidence));
       console.info("Cleaning up the Preview acceptance project...");
       await jsonRequest(`/api/projects/${projectId}`, { method: "DELETE" });
       projectId = undefined;
       console.info("Preview production acceptance passed.");
       process.exitCode = 0;
     } else {
-      console.info("6/10 Applying a follow-up Agent change...");
+      const beforeFiles = await collectFileEvidence();
+      const initialCompleted = initial.events.findLast((event) => event.type === "run.completed");
+      const initialSnapshotId = initialCompleted?.payload?.snapshotId;
+      assert.ok(initialSnapshotId, "Initial Run did not record its Snapshot ID.");
+
+      if (!incrementalOnly) {
+        console.info(
+          "5/10 Exercising Preview interactions, reload recovery, CSP, and UI restart..."
+        );
+        const previewEvidence = await runPreviewBrowserAcceptance({
+          baseUrl,
+          projectId,
+          runId: created.body.runId,
+          previewUrl: initial.previewUrl,
+          cookie,
+          restartTimeoutMs: Math.min(maxWaitMs, 6 * 60_000)
+        });
+        console.info(formatPreviewAcceptanceReport(previewEvidence));
+      }
+
+      console.info("6/10 Applying the fixed same-project follow-up change...");
       const followUp = await jsonRequest(`/api/projects/${projectId}/messages`, {
         method: "POST",
-        body: JSON.stringify({ content: "Add a visible count of remaining Todo items." })
+        body: JSON.stringify({ content: followUpPrompt })
       });
-      await consumeRun(followUp.body.runId);
+      const updated = await consumeRun(followUp.body.runId);
+      assert.ok(updated.previewUrl, "Follow-up Run did not publish an updated Preview URL.");
 
-      console.info("7/10 Testing manual edit synchronization through the Worker...");
-      const files = (await jsonRequest(`/api/projects/${projectId}/files`)).body.files;
-      const target = files.find((file) => file.path === "src/App.tsx");
-      assert.ok(target, "Generated project is missing src/App.tsx.");
-      const current = (
-        await jsonRequest(
-          `/api/projects/${projectId}/files/content?path=${encodeURIComponent(target.path)}`
-        )
-      ).body;
-      const saved = await jsonRequest(`/api/projects/${projectId}/files/content`, {
-        method: "PUT",
-        body: JSON.stringify({
-          path: target.path,
-          content: `${current.content}\n/* live-smoke-manual-edit */\n`,
-          version: current.version
-        })
-      });
-      await waitForRuntimeJob(saved.body.runtimeJobId);
+      if (incrementalOnly) {
+        console.info(
+          "7/10 Verifying versions, Snapshot continuity, conversation, and UI behavior..."
+        );
+        const afterFiles = await collectFileEvidence();
+        const followUpCompleted = updated.events.findLast(
+          (event) => event.type === "run.completed"
+        );
+        const followUpSnapshotId = followUpCompleted?.payload?.snapshotId;
+        assert.ok(followUpSnapshotId, "Follow-up Run did not record its Snapshot ID.");
+        const browserEvidence = await runIncrementalPreviewBrowserAcceptance({
+          baseUrl,
+          projectId,
+          previewUrl: updated.previewUrl,
+          cookie,
+          expectedMessages: [fixedPrompt, followUpPrompt]
+        });
+        const preview = await fetch(updated.previewUrl, { signal: AbortSignal.timeout(30_000) });
+        const incrementalEvidence = validateIncrementalAcceptanceEvidence({
+          projectId,
+          initialRunId: created.body.runId,
+          followUpMessageId: followUp.body.messageId,
+          followUpRunId: followUp.body.runId,
+          initialSnapshotId,
+          followUpSnapshotId,
+          events: updated.events,
+          beforeFiles,
+          afterFiles,
+          previewUrl: updated.previewUrl,
+          previewHttpStatus: preview.status,
+          ...browserEvidence
+        });
+        console.info(formatIncrementalAcceptanceReport(incrementalEvidence));
+        console.info("Cleaning up the incremental acceptance project...");
+        await jsonRequest(`/api/projects/${projectId}`, { method: "DELETE" });
+        projectId = undefined;
+        console.info("Incremental modification production acceptance passed.");
+        process.exitCode = 0;
+      } else {
+        console.info("7/10 Testing manual edit synchronization through the Worker...");
+        const files = (await jsonRequest(`/api/projects/${projectId}/files`)).body.files;
+        const target = files.find((file) => file.path === "src/App.tsx");
+        assert.ok(target, "Generated project is missing src/App.tsx.");
+        const current = (
+          await jsonRequest(
+            `/api/projects/${projectId}/files/content?path=${encodeURIComponent(target.path)}`
+          )
+        ).body;
+        const saved = await jsonRequest(`/api/projects/${projectId}/files/content`, {
+          method: "PUT",
+          body: JSON.stringify({
+            path: target.path,
+            content: `${current.content}\n/* live-smoke-manual-edit */\n`,
+            version: current.version
+          })
+        });
+        await waitForRuntimeJob(saved.body.runtimeJobId);
 
-      console.info("8/10 Testing direct Preview restart/recovery evidence...");
-      const restart = await jsonRequest(`/api/projects/${projectId}/runtime/restart`, {
-        method: "POST"
-      });
-      const restarted = await waitForRuntimeJob(restart.body.runtimeJobId);
-      assert.ok(restarted.previewUrl, "Restart did not return a Preview URL.");
+        console.info("8/10 Testing direct Preview restart/recovery evidence...");
+        const restart = await jsonRequest(`/api/projects/${projectId}/runtime/restart`, {
+          method: "POST"
+        });
+        const restarted = await waitForRuntimeJob(restart.body.runtimeJobId);
+        assert.ok(restarted.previewUrl, "Restart did not return a Preview URL.");
 
-      console.info("9/10 Downloading and validating the source ZIP...");
-      const download = await fetch(`${baseUrl}/api/projects/${projectId}/download`, {
-        headers: { Cookie: cookie },
-        signal: AbortSignal.timeout(30_000)
-      });
-      assert.equal(download.status, 200);
-      const zip = new Uint8Array(await download.arrayBuffer());
-      assert.equal(new DataView(zip.buffer).getUint32(0, true), 0x04034b50);
+        console.info("9/10 Downloading and validating the source ZIP...");
+        const download = await fetch(`${baseUrl}/api/projects/${projectId}/download`, {
+          headers: { Cookie: cookie },
+          signal: AbortSignal.timeout(30_000)
+        });
+        assert.equal(download.status, 200);
+        const zip = new Uint8Array(await download.arrayBuffer());
+        assert.equal(new DataView(zip.buffer).getUint32(0, true), 0x04034b50);
 
-      console.info("10/10 Cleaning up the smoke-test project...");
-      await jsonRequest(`/api/projects/${projectId}`, { method: "DELETE" });
-      projectId = undefined;
-      console.info("Live production smoke test passed.");
+        console.info("10/10 Cleaning up the smoke-test project...");
+        await jsonRequest(`/api/projects/${projectId}`, { method: "DELETE" });
+        projectId = undefined;
+        console.info("Live production smoke test passed.");
+      }
     }
   }
 } finally {

@@ -558,6 +558,7 @@ export async function processNextRun(
       }
 
       let filesPersisted = 0;
+      let snapshotId: string | undefined;
       if (snapshotStore) {
         try {
           await appendStageProgress(db, run.id, {
@@ -583,7 +584,12 @@ export async function processNextRun(
           const storageKey = `${run.projectId}/${run.id}.zip`;
           await checkBoundary();
           await snapshotStore.upload(storageKey, createProjectZip(files));
-          await createSnapshot(db, { projectId: run.projectId, runId: run.id, storageKey });
+          const snapshot = await createSnapshot(db, {
+            projectId: run.projectId,
+            runId: run.id,
+            storageKey
+          });
+          snapshotId = snapshot.id;
           const staleKeys = await pruneProjectSnapshots(db, run.projectId, 5);
           if (staleKeys.length) await snapshotStore.remove(staleKeys);
           const summary = clearCompletionSummary(codingResult.summary, filesPersisted);
@@ -615,7 +621,8 @@ export async function processNextRun(
           summary: clearCompletionSummary(codingResult.summary, filesPersisted),
           filesPersisted,
           ...(completedPreviewUrl ? { previewUrl: completedPreviewUrl } : {}),
-          validationCommands: [installCommand, buildCommand]
+          validationCommands: [installCommand, buildCommand],
+          ...(snapshotId ? { snapshotId } : {})
         }
       });
       return true;

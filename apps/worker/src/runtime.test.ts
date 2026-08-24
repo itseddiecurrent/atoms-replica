@@ -472,6 +472,7 @@ describe("processNextRun", () => {
       kill: vi.fn()
     };
     const snapshotStore = { upload: vi.fn(), remove: vi.fn() };
+    createSnapshot.mockResolvedValue({ id: "snapshot-1" });
     pruneProjectSnapshots.mockResolvedValue(["project-1/old-run.zip"]);
 
     await processNextRun(
@@ -510,6 +511,11 @@ describe("processNextRun", () => {
     expect(finalizeRun.mock.invocationCallOrder[0]).toBeLessThan(
       appendRunEvent.mock.invocationCallOrder[completedEventCall]!
     );
+    expect(appendRunEvent).toHaveBeenCalledWith("database", {
+      runId: "run-1",
+      type: "run.completed",
+      payload: expect.objectContaining({ snapshotId: "snapshot-1" })
+    });
   });
 
   it("fails the run when snapshot upload fails and never publishes completion", async () => {
