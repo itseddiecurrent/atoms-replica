@@ -21,7 +21,7 @@ for (const path of [".env", ".env.test-account"]) {
 }
 
 const fixedPrompt = "创建一个带添加、完成和删除功能的 Todo App，并显示未完成数量。";
-const acceptanceRunnerRelease = "step6-browser-preview-interaction-v2";
+const acceptanceRunnerRelease = "step6-browser-preview-interaction-v3";
 const baseUrl = productionBaseUrl(required("E2E_BASE_URL"));
 const email = required("E2E_EMAIL");
 const password = required("E2E_PASSWORD");
@@ -153,6 +153,9 @@ async function waitForRuntimeJob(runtimeJobId) {
 
 try {
   console.info(`Acceptance runner release: ${acceptanceRunnerRelease}`);
+  console.info(
+    `Acceptance runner commit: ${process.env.RAILWAY_GIT_COMMIT_SHA?.trim() || "unavailable"}`
+  );
   console.info("1/10 Checking production readiness...");
   const health = await fetch(`${baseUrl}/api/health`, { signal: AbortSignal.timeout(10_000) });
   assert.equal(health.status, 200);
@@ -227,7 +230,8 @@ try {
       projectId,
       runId: created.body.runId,
       previewUrl: initial.previewUrl,
-      cookie
+      cookie,
+      restartTimeoutMs: Math.min(maxWaitMs, 6 * 60_000)
     });
     console.info(formatPreviewAcceptanceReport(previewEvidence));
 

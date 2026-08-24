@@ -54,6 +54,10 @@ type ViewMode = "preview" | "editor";
 type RunStatus =
   "queued" | "planning" | "coding" | "validating" | "running" | "failed" | "cancelled";
 
+// A cold Sandbox restore may spend up to two command-timeout windows installing dependencies and
+// waiting for the public Preview. Keep the browser alive long enough to receive that valid result.
+const RUNTIME_JOB_TIMEOUT_MS = 6 * 60_000;
+
 function FileIcon({ kind }: { kind: "folder" | "json" | "tsx" | "html" | "css" }) {
   if (kind === "folder") return <Folder className="h-4 w-4 text-violet-500" />;
   if (kind === "json") return <FileJson2 className="h-4 w-4 text-amber-500" />;
@@ -326,7 +330,7 @@ export function Workspace({
   }
 
   async function waitForRuntimeJob(runtimeJobId: string) {
-    const deadline = Date.now() + 180_000;
+    const deadline = Date.now() + RUNTIME_JOB_TIMEOUT_MS;
     while (Date.now() < deadline) {
       const response = await fetch(`/api/runtime-jobs/${runtimeJobId}`, { cache: "no-store" });
       const job = (await response.json()) as {

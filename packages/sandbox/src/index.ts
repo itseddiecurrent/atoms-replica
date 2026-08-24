@@ -300,7 +300,11 @@ export class E2BSandboxAdapter implements SandboxAdapter {
   }
 
   async connect(sandboxId: string): Promise<void> {
-    this.sandbox = await this.observe("sandbox.connect", () => this.options.sdk.connect(sandboxId));
+    const sandbox = await this.observe("sandbox.connect", () =>
+      this.options.sdk.connect(sandboxId)
+    );
+    await this.observe("sandbox.extend_timeout", () => sandbox.setTimeout(this.options.timeoutMs));
+    this.sandbox = sandbox;
   }
 
   async writeFile(path: string, content: string): Promise<void> {

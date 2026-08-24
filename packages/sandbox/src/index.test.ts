@@ -154,6 +154,7 @@ describe("E2BSandboxAdapter", () => {
       onProviderCall
     });
     await adapter.connect("sb-test");
+    expect(sandbox.setTimeout).toHaveBeenCalledWith(15 * 60 * 1000);
     await adapter.writeFile("src/App.tsx", "updated");
     await expect(adapter.readFile("src/App.tsx")).resolves.toBe("file contents");
     await expect(adapter.listFiles()).resolves.toEqual(["package.json", "src/App.tsx"]);

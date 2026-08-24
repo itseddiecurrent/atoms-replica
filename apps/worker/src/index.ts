@@ -89,15 +89,13 @@ if (mode === "disabled") {
         projectFiles,
         previewPort: Number(env.E2B_PREVIEW_PORT)
       });
-      if (restored.created) {
-        await saveProjectSandbox(database.db, {
-          projectId,
-          sandboxId: restored.sandboxId,
-          expiresAt: new Date(Date.now() + Number(env.E2B_SANDBOX_TIMEOUT_SECONDS) * 1000)
-        });
-        if (restored.previewUrl)
-          await saveProjectPreview(database.db, { projectId, previewUrl: restored.previewUrl });
-      }
+      await saveProjectSandbox(database.db, {
+        projectId,
+        sandboxId: restored.sandboxId,
+        expiresAt: new Date(Date.now() + Number(env.E2B_SANDBOX_TIMEOUT_SECONDS) * 1000)
+      });
+      if (restored.created && restored.previewUrl)
+        await saveProjectPreview(database.db, { projectId, previewUrl: restored.previewUrl });
       return {
         sandbox,
         projectFiles,

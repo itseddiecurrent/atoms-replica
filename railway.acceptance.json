@@ -14,7 +14,7 @@
     ]
   },
   "deploy": {
-    "startCommand": "node scripts/preview-smoke.mjs",
+    "startCommand": "node --enable-source-maps scripts/preview-smoke.mjs",
     "restartPolicyType": "NEVER"
   }
 }

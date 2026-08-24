@@ -22,7 +22,10 @@ then starts headless Chromium and verifies all of the following:
 
 The Restart control stays disabled until React hydration has attached its handler. The Gate waits
 for that explicit client-ready state before clicking, then reports queue, Worker terminal, and UI
-result failures separately instead of collapsing them into one timeout.
+result failures separately instead of collapsing them into one timeout. Runtime operations allow
+six minutes because an expired Sandbox may legitimately require a dependency install and public
+Preview health check before it can report success. Reconnecting to a live Sandbox renews its E2B
+TTL and persists the renewed expiry before Restart runs.
 
 The generated Project is deleted in `finally`, including when an assertion fails. The evidence
 record contains IDs, statuses, and behavioral results only; it never prints the session cookie,
@@ -58,7 +61,9 @@ same browser Gate once with `restartPolicyType: NEVER`. Configure only:
 
 Do not give this service database, Supabase service-role, Firebase Admin, OpenAI, or E2B keys. A
 successful Deploy Log ends with `Preview production acceptance passed` and contains a
-`Preview Production Acceptance Record`.
+`Preview Production Acceptance Record`. The first lines must identify release
+`step6-browser-preview-interaction-v3` and the Railway source commit; reject logs from an older
+release even if they were produced by manually restarting an earlier deployment.
 
 ## Log boundary check
 

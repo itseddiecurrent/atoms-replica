@@ -506,7 +506,8 @@ export async function runPreviewBrowserAcceptance({
   runId,
   previewUrl,
   cookie,
-  executablePath
+  executablePath,
+  restartTimeoutMs = 6 * 60_000
 }) {
   const browser = await launchBrowser({ ...(executablePath ? { executablePath } : {}) });
   const page = await createPage(browser.connection);
@@ -662,7 +663,11 @@ export async function runPreviewBrowserAcceptance({
           `Runtime Job ${runtimeJobId.slice(0, 8)} last status: ${state.lastStatus ?? "not observed"}.`
         );
       },
-      { timeoutMs: 190_000, intervalMs: 500, message: "Workspace restart did not complete." }
+      {
+        timeoutMs: restartTimeoutMs,
+        intervalMs: 500,
+        message: "Workspace restart did not complete."
+      }
     );
     assert.ok(terminalJob.terminal, "Workspace reported that Preview restart failed.");
     assert.notEqual(
