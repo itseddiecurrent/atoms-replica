@@ -113,8 +113,12 @@ export async function runPersistenceReloginBrowserAcceptance({
     const reloaded = await readWorkspaceState(page, stateInput);
 
     await page.navigate(`${baseUrl}/projects`);
-    const dashboardBeforeLogout = await page.evaluate(
-      `document.body.innerText.includes(${JSON.stringify(projectId)})`
+    const dashboardBeforeLogout = await waitUntil(
+      () => page.evaluate(`document.body.innerText.includes(${JSON.stringify(projectId)})`),
+      {
+        timeoutMs: 30_000,
+        message: "Dashboard did not render the checkpoint Project before logout."
+      }
     );
     const signedOut = await page.evaluate(`(() => {
       const button = [...document.querySelectorAll("button")].find((candidate) => candidate.textContent.trim() === "Sign out");
@@ -139,8 +143,12 @@ export async function runPersistenceReloginBrowserAcceptance({
       timeoutMs: 30_000,
       message: "Dedicated account did not return to the Dashboard after login."
     });
-    const dashboardAfterLogin = await page.evaluate(
-      `document.body.innerText.includes(${JSON.stringify(projectId)})`
+    const dashboardAfterLogin = await waitUntil(
+      () => page.evaluate(`document.body.innerText.includes(${JSON.stringify(projectId)})`),
+      {
+        timeoutMs: 30_000,
+        message: "Dashboard did not restore the checkpoint Project after login."
+      }
     );
     await page.navigate(workspaceUrl);
     const relogged = await readWorkspaceState(page, stateInput);

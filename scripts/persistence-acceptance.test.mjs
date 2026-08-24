@@ -166,6 +166,15 @@ test("rejects a reused Sandbox after expiry", () => {
   );
 });
 
+test("identifies a missing Dashboard Project after re-login", () => {
+  const browser = evidence().browser;
+  browser.dashboardAfterLogin = false;
+  assert.throws(
+    () => validatePersistenceAcceptanceEvidence(evidence({ browser })),
+    /Dashboard must restore the Project after login/
+  );
+});
+
 test("rejects a missing or orphaned persistence relation", () => {
   const broken = graph("newsandbox", "https://new.e2b.app", 7, [
     { id: ids.ideJobId, type: "sync_file", status: "completed" }

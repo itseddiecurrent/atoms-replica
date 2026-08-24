@@ -178,10 +178,18 @@ export function validatePersistenceAcceptanceEvidence(evidence) {
   assertWorkspaceState(evidence.browser.initial, "Initial load");
   assertWorkspaceState(evidence.browser.reloaded, "Page reload");
   assertWorkspaceState(evidence.browser.relogged, "Re-login");
-  assert.equal(evidence.browser.dashboardBeforeLogout, true);
-  assert.equal(evidence.browser.dashboardAfterLogin, true);
-  assert.equal(evidence.browser.signedOut, true);
-  assert.equal(evidence.browser.signedIn, true);
+  assert.equal(
+    evidence.browser.dashboardBeforeLogout,
+    true,
+    "Dashboard must contain the Project before logout."
+  );
+  assert.equal(
+    evidence.browser.dashboardAfterLogin,
+    true,
+    "Dashboard must restore the Project after login."
+  );
+  assert.equal(evidence.browser.signedOut, true, "Dedicated account must sign out.");
+  assert.equal(evidence.browser.signedIn, true, "Dedicated account must sign back in.");
 
   const expected = {
     projectId: evidence.projectId,
