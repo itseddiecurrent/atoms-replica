@@ -20,15 +20,18 @@ describe("Workspace", () => {
     expect(html).toContain("Editor");
     expect(html).toContain("Ask for a change");
     expect(html).toContain("Dashboard");
+    expect(html).toContain("Generation progress");
+    expect(html).toContain("100%");
     expect(html).toContain('href="/api/projects/project-1/download"');
   });
 
-  it("renders the starter file tree and editor entry point", () => {
+  it("does not render fake generated files before the Worker writes them", () => {
     const html = renderToStaticMarkup(
       <Workspace projectId="project-1" projectName="Water dashboard" />
     );
 
-    expect(html).toContain("App.tsx");
+    expect(html).toContain("No generated files yet");
+    expect(html).not.toContain("App.tsx");
     expect(html).toContain('aria-label="Send message"');
   });
 
@@ -75,7 +78,7 @@ describe("Workspace", () => {
       />
     );
     expect(html).toContain("Cancel");
-    expect(html).toContain("Coding");
+    expect(html).toContain("Coding · 30%");
   });
 
   it("renders failure-specific recovery actions", () => {

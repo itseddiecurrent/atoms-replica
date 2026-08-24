@@ -161,6 +161,27 @@ function validationMessage(command: string, output: string) {
   return `${command} failed:\n${detail}`;
 }
 
+async function appendStageProgress(
+  db: Database,
+  runId: string,
+  payload: {
+    stage: "planning" | "workspace" | "coding" | "validation" | "preview" | "saving";
+    percent: number;
+    title: string;
+    detail?: string;
+  }
+) {
+  await appendRunEvent(db, { runId, type: "stage.progress", payload });
+}
+
+function clearCompletionSummary(agentSummary: string, filesPersisted: number) {
+  const fileResult =
+    filesPersisted > 0
+      ? `Generated and saved ${filesPersisted} project ${filesPersisted === 1 ? "file" : "files"}.`
+      : "Generated and saved the project files.";
+  return `${fileResult} Validation passed: dependency installation and production build both exited successfully. Preview is live. Agent summary: ${agentSummary}`;
+}
+
 function classifyRunError(error: unknown): { code: ErrorCode; message: string } {
   const message = error instanceof Error ? error.message : "Worker failed.";
   if (error instanceof RunProcessingError) return { code: error.code, message };
@@ -252,6 +273,12 @@ export async function processNextRun(
   try {
     await checkBoundary();
     await appendRunEvent(db, { runId: run.id, type: "run.planning", payload: {} });
+    await appendStageProgress(db, run.id, {
+      stage: "planning",
+      percent: 10,
+      title: "Understanding your request",
+      detail: "Creating a concrete implementation plan and acceptance criteria."
+    });
     const prompt = await getMessageContent(db, run.triggerMessageId);
     if (!prompt) throw new Error("Trigger message was not found.");
     const agentContext = await getProjectAgentContext(db, run.projectId);
@@ -295,6 +322,12 @@ export async function processNextRun(
     });
     if (coderFactory) {
       sandboxStartedAt = Date.now();
+      await appendStageProgress(db, run.id, {
+        stage: "workspace",
+        percent: 20,
+        title: "Preparing the remote workspace",
+        detail: "Creating or restoring the E2B Sandbox and project files."
+      });
       try {
         runContext = await coderFactory({ id: run.id, projectId: run.projectId, workerId });
       } catch (error) {
@@ -310,6 +343,12 @@ export async function processNextRun(
       await checkBoundary();
       await beginRunCoding(db, run.id, workerId);
       await appendRunEvent(db, { runId: run.id, type: "run.coding", payload: {} });
+      await appendStageProgress(db, run.id, {
+        stage: "coding",
+        percent: 30,
+        title: "Generating project code",
+        detail: "File and tool activity will appear below as it happens."
+      });
       let codingResult;
       try {
         codingResult = await activeCoder.run({
@@ -329,11 +368,23 @@ export async function processNextRun(
         type: "assistant.delta",
         payload: { text: codingResult.summary }
       });
+      await appendStageProgress(db, run.id, {
+        stage: "coding",
+        percent: 60,
+        title: "Code generation finished",
+        detail: `${codingResult.turns} model turns and ${codingResult.toolCalls} tool calls completed.`
+      });
       await beginRunValidation(db, run.id, workerId);
       await appendRunEvent(db, { runId: run.id, type: "run.validating", payload: {} });
       if (!runContext) return true;
 
       const installCommand = validationOptions.installCommand ?? "npm install --no-audit --no-fund";
+      await appendStageProgress(db, run.id, {
+        stage: "validation",
+        percent: 65,
+        title: "Installing project dependencies",
+        detail: installCommand
+      });
       const installResult = await runSandboxCommand(
         installCommand,
         validationOptions.installTimeoutMs ?? 120_000
@@ -341,7 +392,11 @@ export async function processNextRun(
       await appendRunEvent(db, {
         runId: run.id,
         type: "command.output",
-        payload: { command: installCommand, output: commandOutput(installResult) }
+        payload: {
+          command: installCommand,
+          output: commandOutput(installResult),
+          exitCode: installResult.exitCode
+        }
       });
       if (installResult.exitCode !== 0) {
         throw new RunProcessingError(
@@ -351,6 +406,12 @@ export async function processNextRun(
       }
 
       const buildCommand = validationOptions.buildCommand ?? "npm run build";
+      await appendStageProgress(db, run.id, {
+        stage: "validation",
+        percent: 75,
+        title: "Building the generated app",
+        detail: buildCommand
+      });
       const maxRepairAttempts = validationOptions.maxRepairAttempts ?? 2;
       let buildResult = await runSandboxCommand(
         buildCommand,
@@ -359,7 +420,11 @@ export async function processNextRun(
       await appendRunEvent(db, {
         runId: run.id,
         type: "command.output",
-        payload: { command: buildCommand, output: commandOutput(buildResult) }
+        payload: {
+          command: buildCommand,
+          output: commandOutput(buildResult),
+          exitCode: buildResult.exitCode
+        }
       });
 
       for (let attempt = 0; buildResult.exitCode !== 0; attempt += 1) {
@@ -377,6 +442,12 @@ export async function processNextRun(
         await checkBoundary();
         await beginRunCoding(db, run.id, workerId);
         await appendRunEvent(db, { runId: run.id, type: "run.coding", payload: {} });
+        await appendStageProgress(db, run.id, {
+          stage: "coding",
+          percent: 78 + attempt * 6,
+          title: `Repairing the failed build (attempt ${attempt + 1}/${maxRepairAttempts})`,
+          detail: message
+        });
         let repairResult;
         try {
           repairResult = await activeCoder.run({
@@ -393,6 +464,12 @@ export async function processNextRun(
         await checkBoundary();
         await beginRunValidation(db, run.id, workerId);
         await appendRunEvent(db, { runId: run.id, type: "run.validating", payload: {} });
+        await appendStageProgress(db, run.id, {
+          stage: "validation",
+          percent: 82 + attempt * 6,
+          title: "Re-running the production build",
+          detail: buildCommand
+        });
         await heartbeatRun(db, run.id, workerId);
         buildResult = await runSandboxCommand(
           buildCommand,
@@ -401,22 +478,40 @@ export async function processNextRun(
         await appendRunEvent(db, {
           runId: run.id,
           type: "command.output",
-          payload: { command: buildCommand, output: commandOutput(buildResult) }
+          payload: {
+            command: buildCommand,
+            output: commandOutput(buildResult),
+            exitCode: buildResult.exitCode
+          }
         });
       }
 
+      let completedPreviewUrl: string | undefined;
       try {
         await checkBoundary();
+        await appendStageProgress(db, run.id, {
+          stage: "preview",
+          percent: 88,
+          title: "Starting the live Preview",
+          detail: `Waiting for Vite on port ${validationOptions.previewPort ?? 5173}.`
+        });
         await runContext.sandbox.startDevServer(
           validationOptions.previewPort ? { port: validationOptions.previewPort } : undefined
         );
         const previewUrl = await runContext.sandbox.getPreviewUrl(validationOptions.previewPort);
+        completedPreviewUrl = previewUrl;
         await checkBoundary();
         await saveProjectPreview(db, { projectId: run.projectId, previewUrl });
         await appendRunEvent(db, {
           runId: run.id,
           type: "preview.ready",
           payload: { url: previewUrl }
+        });
+        await appendStageProgress(db, run.id, {
+          stage: "preview",
+          percent: 92,
+          title: "Preview is live",
+          detail: "The generated app responded successfully over HTTPS."
         });
       } catch (error) {
         throw new RunProcessingError(
@@ -425,8 +520,15 @@ export async function processNextRun(
         );
       }
 
+      let filesPersisted = 0;
       if (snapshotStore) {
         try {
+          await appendStageProgress(db, run.id, {
+            stage: "saving",
+            percent: 95,
+            title: "Saving generated files",
+            detail: "Persisting project files and creating a recoverable Snapshot."
+          });
           const files = [];
           for (const path of await runContext.sandbox.listFiles()) {
             await checkBoundary();
@@ -440,17 +542,25 @@ export async function processNextRun(
               updatedBy: "agent"
             });
           }
+          filesPersisted = files.length;
           const storageKey = `${run.projectId}/${run.id}.zip`;
           await checkBoundary();
           await snapshotStore.upload(storageKey, createProjectZip(files));
           await createSnapshot(db, { projectId: run.projectId, runId: run.id, storageKey });
           const staleKeys = await pruneProjectSnapshots(db, run.projectId, 5);
           if (staleKeys.length) await snapshotStore.remove(staleKeys);
+          const summary = clearCompletionSummary(codingResult.summary, filesPersisted);
           await finalizeRun(db, {
             runId: run.id,
             projectId: run.projectId,
             workerId,
-            summary: codingResult.summary
+            summary
+          });
+          await appendStageProgress(db, run.id, {
+            stage: "saving",
+            percent: 98,
+            title: "Project saved",
+            detail: `${filesPersisted} files persisted with a recoverable Snapshot.`
           });
         } catch (error) {
           throw new RunProcessingError(
@@ -464,7 +574,12 @@ export async function processNextRun(
       await appendRunEvent(db, {
         runId: run.id,
         type: "run.completed",
-        payload: { summary: codingResult.summary }
+        payload: {
+          summary: clearCompletionSummary(codingResult.summary, filesPersisted),
+          filesPersisted,
+          ...(completedPreviewUrl ? { previewUrl: completedPreviewUrl } : {}),
+          validationCommands: [installCommand, buildCommand]
+        }
       });
       return true;
     }

@@ -112,7 +112,23 @@ describe("createPlanner", () => {
       createPlanner({ apiKey: "key", model: "model", maxOutputTokens: 1000, fetchImpl }).createPlan(
         "Build an app"
       )
-    ).rejects.toMatchObject({ code: "OPENAI_ERROR" } satisfies Partial<PlannerError>);
+    ).rejects.toMatchObject({
+      code: "OPENAI_ERROR",
+      message: expect.stringMatching(/budget, balance, and model rate limits/)
+    } satisfies Partial<PlannerError>);
+  });
+
+  it("classifies network failures as actionable provider errors", async () => {
+    const fetchImpl = vi.fn().mockRejectedValue(new TypeError("fetch failed"));
+
+    await expect(
+      createPlanner({ apiKey: "key", model: "model", maxOutputTokens: 1000, fetchImpl }).createPlan(
+        "Build an app"
+      )
+    ).rejects.toMatchObject({
+      code: "OPENAI_ERROR",
+      message: expect.stringMatching(/outbound networking/)
+    } satisfies Partial<PlannerError>);
   });
 });
 
@@ -340,6 +356,27 @@ describe("createCoder", () => {
       ).run({ prompt: "Build", plan, fileTree: [] })
     ).rejects.toThrow("HTTP 400: Invalid tools schema.");
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("surfaces actionable OpenAI quota guidance after retries", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockReturnValue(response({ error: { message: "Rate limit reached." } }, false, 429));
+
+    await expect(
+      createCoder(
+        {
+          apiKey: "key",
+          model: "model",
+          maxOutputTokens: 1000,
+          maxRequestAttempts: 2,
+          retryDelayMs: 0,
+          fetchImpl
+        },
+        fakeSandbox()
+      ).run({ prompt: "Build", plan, fileTree: [] })
+    ).rejects.toThrow("Project budget, balance, and model rate limits");
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
   it("checks cancellation before making another model request", async () => {

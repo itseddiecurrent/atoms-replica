@@ -278,7 +278,8 @@ describe("processNextRun", () => {
       type: "command.output",
       payload: {
         command: "npm install --no-audit --no-fund",
-        output: "sh: npm: command not found"
+        output: "sh: npm: command not found",
+        exitCode: 127
       }
     });
     expect(failRun).toHaveBeenCalledWith(
@@ -436,7 +437,8 @@ describe("processNextRun", () => {
       runId: "run-1",
       projectId: "project-1",
       workerId: "worker-1",
-      summary: "Dashboard ready"
+      summary:
+        "Generated and saved 2 project files. Validation passed: dependency installation and production build both exited successfully. Preview is live. Agent summary: Dashboard ready"
     });
     expect(completeRun).not.toHaveBeenCalled();
     const completedEventCall = appendRunEvent.mock.calls.findIndex(
@@ -565,6 +567,37 @@ describe("processNextRun", () => {
     expect(failRun).toHaveBeenCalledWith(
       "database",
       expect.objectContaining({ code: "AI_LIMIT", message: "Coder token limit exceeded." })
+    );
+  });
+
+  it("maps OpenAI quota and permission failures to the durable AI_FAILED state", async () => {
+    claimNextRun.mockResolvedValue({
+      id: "run-1",
+      projectId: "project-1",
+      triggerMessageId: "message-1"
+    });
+    getMessageContent.mockResolvedValue("Build a dashboard");
+    const error = Object.assign(
+      new Error("OpenAI quota was reached. Check the Project budget and retry."),
+      { code: "OPENAI_ERROR" }
+    );
+    const planner = { createPlan: vi.fn().mockRejectedValue(error) };
+
+    await processNextRun("database" as never, "worker-1", planner);
+
+    expect(failRun).toHaveBeenCalledWith(
+      "database",
+      expect.objectContaining({
+        code: "AI_FAILED",
+        message: "OpenAI quota was reached. Check the Project budget and retry."
+      })
+    );
+    expect(appendRunEvent).toHaveBeenCalledWith(
+      "database",
+      expect.objectContaining({
+        type: "run.failed",
+        payload: expect.objectContaining({ code: "AI_FAILED" })
+      })
     );
   });
 });

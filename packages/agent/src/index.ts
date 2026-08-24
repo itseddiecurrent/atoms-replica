@@ -141,11 +141,13 @@ export function createPlanner(options: PlannerOptions) {
             ...(requestId ? { requestId } : {})
           });
           providerReported = true;
-          if (!response.ok)
+          if (!response.ok) {
+            const detail = await responseErrorMessage(response);
             throw new PlannerError(
-              `OpenAI request failed with HTTP ${response.status}.`,
+              openAIHttpErrorMessage(response.status, detail, "OpenAI"),
               "OPENAI_ERROR"
             );
+          }
           const body = (await response.json()) as {
             output_text?: string;
             output?: Array<{ content?: Array<{ type?: string; text?: string }> }>;
@@ -176,7 +178,10 @@ export function createPlanner(options: PlannerOptions) {
       }
 
       if (lastError instanceof PlannerError) throw lastError;
-      throw new PlannerError("Unable to create a valid implementation plan.", "PLAN_INVALID");
+      throw new PlannerError(
+        `OpenAI could not be reached: ${describeRequestError(lastError)}. Check Worker outbound networking and retry.`,
+        "OPENAI_ERROR"
+      );
     }
   };
 }
@@ -403,6 +408,18 @@ async function responseErrorMessage(response: Response): Promise<string> {
   return response.statusText || "OpenAI returned an error without details.";
 }
 
+function openAIHttpErrorMessage(status: number, detail: string, actor: string): string {
+  const prefix = `${actor} request failed with HTTP ${status}: ${detail}`;
+  if (status === 401) return `${prefix} Verify the Worker OPENAI_API_KEY.`;
+  if (status === 403 || status === 404)
+    return `${prefix} Verify the OpenAI Project and model permissions.`;
+  if (status === 429)
+    return `${prefix} Check the OpenAI Project budget, balance, and model rate limits, then retry.`;
+  if (status === 408 || status >= 500)
+    return `${prefix} OpenAI is temporarily unavailable; retry the Run.`;
+  return `${prefix}.`;
+}
+
 export function createCoder(options: CoderOptions, sandbox: CoderSandbox) {
   const fetchImpl = options.fetchImpl ?? fetch;
   const maxTurns = options.maxTurns ?? 20;
@@ -454,7 +471,7 @@ export function createCoder(options: CoderOptions, sandbox: CoderSandbox) {
         if (!response.ok) {
           const detail = await responseErrorMessage(response);
           throw new CoderError(
-            `Coder request failed with HTTP ${response.status}: ${detail}`,
+            openAIHttpErrorMessage(response.status, detail, "Coder"),
             "CODER_ERROR",
             response.status === 408 ||
               response.status === 409 ||
@@ -477,7 +494,10 @@ export function createCoder(options: CoderOptions, sandbox: CoderSandbox) {
     }
     throw lastError instanceof CoderError
       ? lastError
-      : new CoderError(`Coder request failed: ${describeRequestError(lastError)}`, "CODER_ERROR");
+      : new CoderError(
+          `Coder could not reach OpenAI: ${describeRequestError(lastError)}. Check Worker outbound networking and retry.`,
+          "CODER_ERROR"
+        );
   }
 
   async function executeTool(
@@ -547,7 +567,10 @@ export function createCoder(options: CoderOptions, sandbox: CoderSandbox) {
           if (timer) clearTimeout(timer);
         }
         const output = `${result.stdout}${result.stderr ? `\n${result.stderr}` : ""}`.trim();
-        await emit({ type: "command.output", payload: { command, output } });
+        await emit({
+          type: "command.output",
+          payload: { command, output, exitCode: result.exitCode }
+        });
         return { output: JSON.stringify({ exitCode: result.exitCode, output }) };
       }
       case "finish":

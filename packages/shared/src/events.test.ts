@@ -31,6 +31,31 @@ describe("runEventSchema", () => {
     expect(event.type).toBe("step.started");
   });
 
+  it("parses deterministic stage progress and command exit codes", () => {
+    const progress = runEventSchema.parse({
+      eventId: 5,
+      runId: "550e8400-e29b-41d4-a716-446655440000",
+      timestamp: "2026-08-22T00:00:00.000Z",
+      type: "stage.progress",
+      payload: {
+        stage: "validation",
+        percent: 78,
+        title: "Building the generated app",
+        detail: "npm run build"
+      }
+    });
+    const command = runEventSchema.parse({
+      eventId: 6,
+      runId: "550e8400-e29b-41d4-a716-446655440000",
+      timestamp: "2026-08-22T00:00:00.000Z",
+      type: "command.output",
+      payload: { command: "npm run build", output: "built", exitCode: 0 }
+    });
+
+    expect(progress.type).toBe("stage.progress");
+    expect(command.type).toBe("command.output");
+  });
+
   it("parses validation failures with their repair attempt", () => {
     const event = runEventSchema.parse({
       eventId: 3,

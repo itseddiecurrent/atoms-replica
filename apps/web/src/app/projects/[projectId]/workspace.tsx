@@ -25,6 +25,14 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 
+import {
+  activityFromRunEvent,
+  initialProgressForStatus,
+  progressFromRunEvent,
+  type ActivityItem,
+  type RunStreamEvent
+} from "./workspace-activity";
+
 type WorkspaceProps = {
   projectId: string;
   projectName: string;
@@ -46,16 +54,6 @@ type ViewMode = "preview" | "editor";
 type RunStatus =
   "queued" | "planning" | "coding" | "validating" | "running" | "failed" | "cancelled";
 
-const fixtureFiles = [
-  { path: "src", kind: "folder" as const },
-  { path: "src/App.tsx", kind: "tsx" as const },
-  { path: "src/main.tsx", kind: "tsx" as const },
-  { path: "src/styles.css", kind: "css" as const },
-  { path: "public", kind: "folder" as const },
-  { path: "index.html", kind: "html" as const },
-  { path: "package.json", kind: "json" as const }
-];
-
 function FileIcon({ kind }: { kind: "folder" | "json" | "tsx" | "html" | "css" }) {
   if (kind === "folder") return <Folder className="h-4 w-4 text-violet-500" />;
   if (kind === "json") return <FileJson2 className="h-4 w-4 text-amber-500" />;
@@ -74,17 +72,13 @@ export function Workspace({
   messages = []
 }: WorkspaceProps) {
   const router = useRouter();
-  const fileSummaries = initialFiles.length
-    ? initialFiles.map((file) => ({
-        ...file,
-        kind: file.path.endsWith(".json") ? ("json" as const) : ("tsx" as const)
-      }))
-    : fixtureFiles.map((file) => ({ ...file, version: 1, updatedAt: new Date(0) }));
+  const fileSummaries = initialFiles.map((file) => ({
+    ...file,
+    kind: file.path.endsWith(".json") ? ("json" as const) : ("tsx" as const)
+  }));
   const [viewMode, setViewMode] = useState<ViewMode>("preview");
   const [files, setFiles] = useState(fileSummaries);
-  const [selectedFile, setSelectedFile] = useState(
-    fileSummaries.find((file) => file.kind !== "folder")?.path ?? "src/App.tsx"
-  );
+  const [selectedFile, setSelectedFile] = useState(fileSummaries[0]?.path ?? "src/App.tsx");
   const [expanded, setExpanded] = useState(true);
   const [fileContent, setFileContent] = useState("");
   const [savedContent, setSavedContent] = useState("");
@@ -116,7 +110,8 @@ export function Workspace({
       : null
   );
   const [retryPrompt, setRetryPrompt] = useState<string | null>(null);
-  const [liveEvents, setLiveEvents] = useState<string[]>([]);
+  const [liveEvents, setLiveEvents] = useState<ActivityItem[]>([]);
+  const [runProgress, setRunProgress] = useState(() => initialProgressForStatus(initialRunStatus));
   const [planSummary, setPlanSummary] = useState("Implementation plan");
   const [planSteps, setPlanSteps] = useState([
     "Understand your idea",
@@ -124,18 +119,31 @@ export function Workspace({
     "Validate the preview"
   ]);
   const seenEventIds = useRef(new Set<number>());
+  const localActivityId = useRef(0);
+
+  function addLocalActivity(title: string, detail?: string, tone: ActivityItem["tone"] = "info") {
+    localActivityId.current += 1;
+    setLiveEvents((current) => [
+      ...current,
+      { id: `local-${localActivityId.current}`, title, ...(detail ? { detail } : {}), tone }
+    ]);
+  }
 
   useEffect(() => {
     if (!currentRunId) return;
 
     const source = new EventSource(`/api/runs/${currentRunId}/events`);
     const eventTypes = [
+      "run.queued",
       "run.planning",
       "run.coding",
       "run.validating",
+      "stage.progress",
       "plan.created",
       "step.started",
       "assistant.delta",
+      "tool.started",
+      "tool.completed",
       "command.output",
       "validation.failed",
       "preview.ready",
@@ -148,29 +156,12 @@ export function Workspace({
     ];
     const listeners = eventTypes.map((type) => {
       const listener = (event: Event) => {
-        const data = JSON.parse((event as MessageEvent<string>).data) as {
-          eventId: number;
-          type: string;
-          payload?: {
-            text?: string;
-            title?: string;
-            summary?: string;
-            message?: string;
-            steps?: string[];
-            url?: string;
-            path?: string;
-            code?: string;
-          };
-        };
+        const data = JSON.parse((event as MessageEvent<string>).data) as RunStreamEvent;
         if (seenEventIds.current.has(data.eventId)) return;
         seenEventIds.current.add(data.eventId);
-        const detail =
-          data.payload?.text ??
-          data.payload?.title ??
-          data.payload?.summary ??
-          data.payload?.message ??
-          data.type;
-        setLiveEvents((current) => [...current, detail]);
+        const activity = activityFromRunEvent(data);
+        if (activity) setLiveEvents((current) => [...current, activity]);
+        setRunProgress((current) => progressFromRunEvent(current, data));
         if (data.type === "plan.created") {
           if (data.payload?.summary) setPlanSummary(data.payload.summary);
           if (data.payload?.steps?.length) setPlanSteps(data.payload.steps);
@@ -252,9 +243,7 @@ export function Workspace({
   }
 
   function openEditor() {
-    const file =
-      files.find((item) => item.path === selectedFile && item.kind !== "folder") ??
-      files.find((item) => item.kind !== "folder");
+    const file = files.find((item) => item.path === selectedFile) ?? files[0];
     if (file) {
       void selectFile(file.path);
       return;
@@ -285,7 +274,11 @@ export function Workspace({
     });
     const body = (await response.json()) as { runId?: string; error?: string; code?: string };
     if (!response.ok || !body.runId) {
-      setLiveEvents((current) => [...current, body.error ?? "Unable to queue message."]);
+      addLocalActivity(
+        "Unable to queue request",
+        body.error ?? "Unable to queue message.",
+        "error"
+      );
       if (body.code) setFailure({ code: body.code, message: body.error ?? "Request failed." });
       setRetryPrompt(nextPrompt);
       return;
@@ -293,8 +286,10 @@ export function Workspace({
     setSentPrompt(nextPrompt);
     setPrompt("");
     seenEventIds.current.clear();
+    setLiveEvents([]);
     setCurrentRunId(body.runId);
     setRunStatus("queued");
+    setRunProgress(initialProgressForStatus("queued"));
     setFailure(null);
     setRetryPrompt(null);
   }
@@ -317,10 +312,11 @@ export function Workspace({
       const body = (await response.json()) as { error?: string };
       if (!response.ok) throw new Error(body.error ?? "Unable to cancel run.");
     } catch (error) {
-      setLiveEvents((current) => [
-        ...current,
-        error instanceof Error ? error.message : "Unable to cancel run."
-      ]);
+      addLocalActivity(
+        "Unable to cancel run",
+        error instanceof Error ? error.message : "Unable to cancel run.",
+        "error"
+      );
     } finally {
       setIsCancelling(false);
     }
@@ -374,7 +370,7 @@ export function Workspace({
         throw new Error("File saved but runtime synchronization was not queued.");
       const result = await waitForRuntimeJob(body.runtimeJobId);
       if (result.previewUrl) setPreviewUrl(result.previewUrl);
-      setLiveEvents((current) => [...current, `Synchronized ${selectedFile} to Preview.`]);
+      addLocalActivity("File synchronized to Preview", selectedFile, "success");
     } catch (error) {
       setEditorError(error instanceof Error ? error.message : "Unable to save file.");
     } finally {
@@ -395,12 +391,13 @@ export function Workspace({
       if (!result.previewUrl) throw new Error("Preview restart completed without a URL.");
       setPreviewUrl(result.previewUrl);
       setRunStatus("running");
-      setLiveEvents((current) => [...current, "Preview restarted."]);
+      addLocalActivity("Preview restarted", result.previewUrl, "success");
     } catch (error) {
-      setLiveEvents((current) => [
-        ...current,
-        error instanceof Error ? error.message : "Preview restart failed."
-      ]);
+      addLocalActivity(
+        "Preview restart failed",
+        error instanceof Error ? error.message : "Preview restart failed.",
+        "error"
+      );
     } finally {
       setIsRestarting(false);
     }
@@ -439,13 +436,13 @@ export function Workspace({
               <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
             ) : null}
             {runStatus === "queued"
-              ? "Queued"
+              ? `Queued · ${runProgress.percent}%`
               : runStatus === "planning"
-                ? "Planning"
+                ? `Planning · ${runProgress.percent}%`
                 : runStatus === "coding"
-                  ? "Coding"
+                  ? `Coding · ${runProgress.percent}%`
                   : runStatus === "validating"
-                    ? "Validating"
+                    ? `Validating · ${runProgress.percent}%`
                     : runStatus === "failed"
                       ? "Failed"
                       : runStatus === "cancelled"
@@ -492,6 +489,37 @@ export function Workspace({
             </span>
           </div>
           <div className="flex-1 space-y-5 overflow-auto p-5">
+            <section
+              aria-label="Generation progress"
+              className="rounded-xl border border-violet-100 bg-violet-50/60 p-3"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-xs font-semibold text-violet-950">{runProgress.title}</p>
+                  {runProgress.detail ? (
+                    <p className="mt-1 text-[11px] leading-4 text-violet-700">
+                      {runProgress.detail}
+                    </p>
+                  ) : null}
+                </div>
+                <span className="font-mono text-[11px] font-semibold text-violet-700">
+                  {runProgress.percent}%
+                </span>
+              </div>
+              <div
+                aria-label={`${runProgress.percent}% complete`}
+                className="mt-3 h-1.5 overflow-hidden rounded-full bg-violet-100"
+                role="progressbar"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={runProgress.percent}
+              >
+                <div
+                  className={`h-full rounded-full transition-all duration-500 ${runProgress.stage === "failed" || runProgress.stage === "cancelled" ? "bg-red-500" : runProgress.percent === 100 ? "bg-emerald-500" : "bg-violet-600"}`}
+                  style={{ width: `${runProgress.percent}%` }}
+                />
+              </div>
+            </section>
             {messages.length > 0 ? (
               messages.map((message) => (
                 <div className="flex gap-3" key={message.id}>
@@ -524,12 +552,10 @@ export function Workspace({
               <div className="space-y-3 text-sm">
                 <p className="font-medium text-zinc-800">{planSummary}</p>
                 <div className="space-y-2 text-xs text-zinc-500">
-                  {planSteps.map((step, index) => (
+                  {planSteps.map((step) => (
                     <p className="flex items-center gap-2" key={step}>
-                      {index === 0 ? (
+                      {runProgress.percent === 100 ? (
                         <Check className="h-3.5 w-3.5 text-emerald-500" />
-                      ) : index === 1 ? (
-                        <LoaderCircle className="h-3.5 w-3.5 animate-spin text-violet-500" />
                       ) : (
                         <span className="h-3.5 w-3.5 rounded-full border border-zinc-300" />
                       )}
@@ -549,14 +575,31 @@ export function Workspace({
                 </div>
               </div>
             ) : null}
-            {liveEvents.map((event, index) => (
-              <div className="flex gap-3" key={`${event}-${index}`}>
-                <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-violet-100 text-violet-600">
-                  <Sparkles className="h-4 w-4" />
+            {liveEvents.map((event) => (
+              <div className="flex gap-3" key={event.id}>
+                <div
+                  className={`mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${event.tone === "success" ? "bg-emerald-100 text-emerald-700" : event.tone === "error" ? "bg-red-100 text-red-700" : "bg-violet-100 text-violet-600"}`}
+                >
+                  {event.tone === "success" ? (
+                    <Check className="h-4 w-4" />
+                  ) : event.tone === "error" ? (
+                    <X className="h-4 w-4" />
+                  ) : event.tone === "working" ? (
+                    <LoaderCircle className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Sparkles className="h-4 w-4" />
+                  )}
                 </div>
-                <p className="rounded-2xl rounded-tl-sm bg-violet-50 px-3.5 py-2.5 text-sm text-violet-800">
-                  {event}
-                </p>
+                <div
+                  className={`min-w-0 rounded-2xl rounded-tl-sm px-3.5 py-2.5 ${event.tone === "error" ? "bg-red-50 text-red-800" : event.tone === "success" ? "bg-emerald-50 text-emerald-900" : "bg-violet-50 text-violet-900"}`}
+                >
+                  <p className="text-xs font-semibold">{event.title}</p>
+                  {event.detail ? (
+                    <p className="mt-1 break-words font-mono text-[10px] leading-4 opacity-75">
+                      {event.detail}
+                    </p>
+                  ) : null}
+                </div>
               </div>
             ))}
             {failure ? (
@@ -653,17 +696,23 @@ export function Workspace({
             </button>
             {expanded ? (
               <div className="ml-3 border-l border-zinc-200 pl-2">
-                {files.map((file) => (
-                  <button
-                    className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs ${selectedFile === file.path ? "bg-violet-50 font-medium text-violet-700" : "text-zinc-600 hover:bg-zinc-100"}`}
-                    key={file.path}
-                    onClick={() => selectFile(file.path)}
-                    type="button"
-                  >
-                    <FileIcon kind={file.kind} />
-                    {file.path.includes("/") ? file.path.split("/").pop() : file.path}
-                  </button>
-                ))}
+                {files.length ? (
+                  files.map((file) => (
+                    <button
+                      className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs ${selectedFile === file.path ? "bg-violet-50 font-medium text-violet-700" : "text-zinc-600 hover:bg-zinc-100"}`}
+                      key={file.path}
+                      onClick={() => selectFile(file.path)}
+                      type="button"
+                    >
+                      <FileIcon kind={file.kind} />
+                      {file.path.includes("/") ? file.path.split("/").pop() : file.path}
+                    </button>
+                  ))
+                ) : (
+                  <p className="px-2 py-3 text-xs leading-5 text-zinc-400">
+                    No generated files yet. Files will appear here as the Agent writes them.
+                  </p>
+                )}
               </div>
             ) : null}
           </div>

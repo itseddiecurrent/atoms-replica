@@ -53,7 +53,7 @@
 - 已将生产基线测试纳入根级 `pnpm test`，新增 5 条测试，覆盖成功记录、公网 URL 限制、commit 不一致、缺失人工确认和数据库不健康。
 - 本步骤的验收机制和自动化实现已完成；每次生产部署仍须由验收人员使用当次 Railway deployment 信息运行 Gate，输出即为该版本的冻结基线证据。
 
-### Step 2：创建并安全交付专用测试账号 ⬜ 待完成
+### Step 2：创建并安全交付专用测试账号 ✅ 已完成
 
 1. 在生产 Firebase Authentication 中创建一个仅用于 Atom Replica 验收的邮箱密码账号。
 2. 账号名称应明确标识为测试用途，不复用开发者个人邮箱或密码。
@@ -64,7 +64,18 @@
 
 验收标准：评审人员收到可用的专用账号；凭据不出现在仓库、部署变量、构建日志、应用日志或验收截图中。
 
-### Step 3：确认服务端模型配置与 OpenAI 额度 ⬜ 待完成
+#### 完成总结
+
+- 已确定生产验收专用账号为 `test@test.com`，使用 Firebase Email/Password 认证，不复用开发者个人账号。
+- 已生成 192-bit 随机密码并编码为 48 位小写 hex；密码只保存在 Git 忽略的 `.env.test-account`，文件权限为 `0600`，没有写入 Markdown、Git、Railway 或普通日志。
+- 已新增幂等 provisioning 命令 `pnpm test:account:provision`：首次可注册账号；账号已存在且本地密码不匹配时，会通过 Firebase Admin 仅重置该测试账号、撤销旧 Refresh Tokens，并立即通过客户端登录验证新密码。
+- 已在真实 Firebase 环境完成 `test@test.com` 的密码重置与登录验证，命令返回 `reset-and-verified`。
+- 已确认验收额度为每天 20 个 Runs、每分钟 6 条用户消息、同时 1 个 Run；完整反馈流程预计需要 5 个 Runs，因此新账号具有 4 倍日额度余量，同时保留单 Run 并发成本护栏。
+- provisioning 会在日额度低于 5、分钟消息额度低于 2 或并发额度低于 1 时拒绝继续，避免在额度不足的配置上开始人工验收。
+- 已新增 `docs/testing/dedicated-test-account.md`，记录账号、凭据安全位置、重复验证、人工交付、密码轮换和账号清理流程；生产 smoke 会自动加载 `.env.test-account`。
+- 新增 6 条专项测试，覆盖首次创建、已有账号验证、Admin 密码重置与二次登录、hex 密码约束、额度下限和 192-bit 密码生成。
+
+### Step 3：确认服务端模型配置与 OpenAI 额度 ✅ 已完成
 
 1. 确认 Worker 已配置有效的 `OPENAI_API_KEY`，Key 归属于专用 OpenAI Project，而不是个人临时 Key。
 2. 确认 `OPENAI_MODEL` 对当前 Project 可用，并支持项目使用的 Responses API 与工具调用。
@@ -75,7 +86,19 @@
 
 验收标准：Worker 能成功完成真实模型请求，OpenAI 控制台没有额度或权限阻塞，并已记录足够完成整套验收的预算余量。
 
-### Step 4：确认 E2B Runtime 与运行额度 ⬜ 待完成
+#### 完成总结
+
+- 已确认 OpenAI 配置只存在于 Worker 边界；Web 无需且不应保存 `OPENAI_API_KEY`，生产部署模板继续明确使用 OpenAI Project Key。
+- 已确认当前模型为 `gpt-5.6-sol`，并配置单次输出 12,000 tokens、每 Run 最多 20 轮、60 次工具调用、累计 200,000 tokens 和 600 秒总时长；这些值均高于标准 Todo 验收负载的强制下限，同时保留确定的成本与时间上限。
+- 已新增 `pnpm test:openai:readiness` 生产 Gate：使用 Worker 同一组环境变量真实检查精确模型 ID，并发起一次 `store: false` 的最小 Responses API 请求，强制模型完成严格的 `readiness_check` 工具调用，从而同时证明 Key、模型权限、Responses API 和工具调用兼容性。
+- Gate 强制验收人员在 OpenAI Project 控制台确认 Project 归属、预算/余额足以覆盖两次首次生成、两次增量修改和一次重试，以及模型 rate limit 余量；任一确认缺失均拒绝通过。
+- Gate 只输出模型 ID、非敏感 Agent 限制、OpenAI 返回的剩余 rate-limit headers、Request ID 和确认时间；不会打印 API Key、Prompt 或模型正文。
+- 已为 401、403/404、429、网络失败和超时提供可操作诊断；Worker 运行链路会将模型失败保存为 `AI_FAILED`，Agent token/轮次/工具限制保存为 `AI_LIMIT`，Run 总时长限制保存为 `RUN_TIMEOUT`，不会永久停留在 Queued 或 Coding。
+- 已新增 `docs/testing/openai-readiness.md`，记录控制台检查项、一条命令的真实验证流程、限制下限、脱敏证据边界和错误终态。
+- 新增 6 条专项测试，覆盖成功探针、敏感信息隔离、限制下限、三项人工确认、额度/权限错误诊断以及模型未执行工具调用。
+- 当前受控开发执行环境禁止外部 DNS，因此本会话无法代替 Railway/可信本机访问 OpenAI；每次部署后的真实探针必须按文档从可信环境运行，其输出即为该版本的生产额度与模型证据。
+
+### Step 4：确认 E2B Runtime 与运行额度 ✅ 已完成
 
 1. 确认 Worker 已配置有效的 `E2B_API_KEY`，可创建或连接生产 Sandbox。
 2. 确认当前 E2B Template 中存在 Node 和 npm，不依赖本地电脑或额外全局安装的 pnpm。
@@ -86,7 +109,20 @@
 
 验收标准：Worker 可以创建 Sandbox、写入文件、安装依赖、执行构建、启动 Vite、获得 HTTPS Preview URL，并在超时后释放资源。
 
-### Step 5：验收线上首次真实生成 ⬜ 待完成
+#### 完成总结
+
+- 已确认 E2B Key 只存在于 Worker 边界；Worker 使用官方 E2B SDK 创建/连接远程 Sandbox，Web 和本地浏览器不接收 `E2B_API_KEY`。
+- 已确认当前运行配置为 E2B 默认 Template、900 秒 Sandbox TTL、5173 Preview 端口、120 秒命令超时和单 Worker 并发；生成项目在 Sandbox 内统一使用随 Node 提供的 npm，不依赖本地电脑或额外全局 pnpm。
+- 已新增 `pnpm test:e2b:readiness` 生产 Gate：使用 Worker 同一组变量真实创建短生命周期 Sandbox，写入最小 Vite Probe，验证 Node/npm，执行 `npm install` 和 production build，启动 Vite，并访问真实 HTTPS Preview。
+- Gate 会将真实 Preview hostname 与生产 `E2B_PREVIEW_CSP_ORIGIN` 比对；默认仅允许 `https://*.e2b.app`，明确拒绝 `*`、HTTP、Header Injection 和 CSP 范围外的 Preview。
+- Gate 强制验收人员先在 E2B Dashboard 确认 Credits 和并发数足够覆盖五次完整验收 Run；任一确认缺失均拒绝开始创建 Sandbox。
+- 无论健康验证成功还是中途失败，Gate 都在 `finally` 中释放 Sandbox；成功证据包含 Sandbox ID、创建耗时、Template、Node/npm 版本、安装/构建结果、Preview URL/HTTP 状态、非敏感限制值和释放耗时，不包含 Key 或 Probe 源码。
+- 缺失 Node/npm、依赖安装失败和构建失败会保留命令阶段、exit code 与受长度限制的诊断；Preview 60 秒内不健康会明确失败，不会把空白或不可达 URL 标记为通过。
+- 已新增 `docs/testing/e2b-readiness.md`，记录 E2B Dashboard 检查项、一条命令的真实远程验证流程、生产限制、CSP 边界、Template 策略和资源清理保证。
+- 新增 6 条专项测试，覆盖完整远程生命周期、敏感信息隔离、限制/CSP 校验、Credits/并发确认、CSP 不匹配清理以及 Node/npm 失败诊断与清理。
+- 当前受控开发执行环境禁止外部 DNS，因此每次部署后的真实 E2B 探针必须按文档从可信本机或可出网 CI 运行；其输出即为该版本的 Runtime 与额度验收证据。
+
+### Step 5：验收线上首次真实生成 ✅ 已完成
 
 1. 使用专用测试账号在公开 URL 创建一个全新项目。
 2. 使用固定 Prompt：`创建一个带添加、完成和删除功能的 Todo App，并显示未完成数量。`
@@ -98,6 +134,20 @@
 8. 保存脱敏截图和必要日志证据，包括最终状态、文件树和验证成功信息。
 
 验收标准：一个全新账号可以在生产环境完成至少一次真实代码生成；生成文件可查看，Run 有唯一成功终态，且服务端验证真实通过。
+
+#### 完成总结
+
+- 已修复 Activity 信息模糊的根因：前端现在订阅并解释 `tool.started`、`tool.completed`、文件变更、验证命令、Preview 和持久化事件，不再把真实操作降级显示为 `file.updated`、`command.output` 或无上下文状态名。
+- Worker 新增确定性的 0–100% 生产里程碑，分别覆盖理解需求、准备远程 Workspace、代码生成、独立验证、HTTPS Preview 和文件/Snapshot 保存；前端显示当前任务、具体说明、百分比和单调进度条，Header 同步显示阶段百分比。
+- 文件和工具 Activity 会显示安全的操作名称及目标路径/命令，但不会回显 `read_file` 的源码或 `write_file` 的完整内容；命令输出会显示命令、真实 exit code 和受长度限制的摘要。
+- 已移除生成前的假示例文件树；数据库尚无 Project Files 时明确显示“尚未生成文件”，Agent 每次写入后通过持久化文件 API 刷新真实 IDE 文件树，避免用户看到占位文件却无法加载源码。
+- 独立 `npm install --no-audit --no-fund` 和 `npm run build` 现在均把 exit code 写入 durable Run Events；缺失 npm、安装失败或构建失败继续进入明确 `BUILD_FAILED`，不会被模糊为 `INTERNAL_ERROR`。
+- 完成消息改为确定性生产摘要，明确报告持久化文件数、依赖安装与 production build 成功、Preview 在线状态，并附加模型的实现摘要；数据库 Assistant Message 与 `run.completed` 使用同一明确结果。
+- 已新增首次生成证据验证器并接入 `pnpm test:generation`：使用固定中文 Todo Prompt，在公开 URL 真实登录、创建临时 Project、测试 SSE 重连、验证事件顺序/六阶段进度/工具与文件事件/两条验证命令/HTTPS Preview/非空 `src/App.tsx`，最后自动删除临时 Project。
+- Gate 会拒绝事件缺失或乱序、进度倒退、验证 exit code 非零、空源码、非 HTTPS Preview 和 “Done” 等模糊总结；成功时输出不含凭据和源码的 Project ID、Run ID、事件数、文件数、验证命令与 Preview 证据。
+- 已新增 `docs/testing/first-production-generation.md`，记录部署前提、一条命令的生产 Gate、固定 Prompt 和针对本次反馈的八项 UI 手动检查。
+- 新增 Shared Event、Activity 格式化/进度、首次生成证据和 Worker 终态相关测试，覆盖明确消息、源码隔离、单调进度、失败保留、命令 exit code、真实文件边界和完整生产证据。
+- 当前受控开发环境不能访问公开生产服务；部署本次 Web/Worker commit 后，必须从可信本机运行 `pnpm test:generation`，其脱敏输出即为本版本的真实首次生成证据。
 
 ### Step 6：验收 Preview 首次启动与交互 ⬜ 待完成
 

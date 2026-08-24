@@ -13,6 +13,16 @@ export const runEventSchema = z.discriminatedUnion("type", [
   z.object({ ...eventBase, type: z.literal("run.validating"), payload: z.object({}) }),
   z.object({
     ...eventBase,
+    type: z.literal("stage.progress"),
+    payload: z.object({
+      stage: z.enum(["planning", "workspace", "coding", "validation", "preview", "saving"]),
+      percent: z.number().int().min(0).max(100),
+      title: z.string(),
+      detail: z.string().optional()
+    })
+  }),
+  z.object({
+    ...eventBase,
     type: z.literal("run.cancelled"),
     payload: z.object({ message: z.string() })
   }),
@@ -59,7 +69,11 @@ export const runEventSchema = z.discriminatedUnion("type", [
   z.object({
     ...eventBase,
     type: z.literal("command.output"),
-    payload: z.object({ command: z.string(), output: z.string() })
+    payload: z.object({
+      command: z.string(),
+      output: z.string(),
+      exitCode: z.number().int().optional()
+    })
   }),
   z.object({
     ...eventBase,
@@ -74,7 +88,12 @@ export const runEventSchema = z.discriminatedUnion("type", [
   z.object({
     ...eventBase,
     type: z.literal("run.completed"),
-    payload: z.object({ summary: z.string() })
+    payload: z.object({
+      summary: z.string(),
+      filesPersisted: z.number().int().nonnegative().optional(),
+      previewUrl: z.url().optional(),
+      validationCommands: z.array(z.string()).optional()
+    })
   }),
   z.object({
     ...eventBase,
