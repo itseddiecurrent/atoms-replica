@@ -27,23 +27,26 @@ production Sandbox TTL. The Railway gate therefore uses two deployments of the s
 1. Set `E2E_PERSISTENCE_PHASE=prepare` and remove `E2E_PERSISTENCE_PROJECT_ID`, then deploy. The
    Runner performs both real Agent Runs and validates the durable graph. It prints a
    `Persistence Acceptance Checkpoint` and begins preserving that one temporary Project before
-   launching Chromium, so a handled browser failure cannot discard two successful Runs. It then
-   performs incremental browser checks, reload, and logout/login, and exits successfully without
-   waiting. Only the explicit `Persistence prepare deployment passed` line marks prepare as complete.
+   launching Chromium, then exits successfully. Keeping generation and browser verification in
+   separate fresh containers prevents Chromium from competing with the retained Agent/SSE state for
+   Runner memory. Only the explicit `Persistence prepare deployment passed` line marks prepare as
+   complete.
 2. Copy the exact Project ID from that record. After its printed `Original Sandbox expiry`, set
    `E2E_PERSISTENCE_PHASE=resume` and `E2E_PERSISTENCE_PROJECT_ID` to that ID, then redeploy the same
    commit. The Runner authenticates, owner-scopes and validates the complete checkpoint before any
    mutation. It never creates or spends another Agent Run in resume mode.
-3. Resume re-verifies reload and a real logout/login, waits any remaining real TTL without a deploy
-   settle delay, restores through the UI, edits, downloads, validates in a clean directory, prints
-   the final record, and deletes the temporary Project.
+3. Resume uses a fresh container to verify reload and a real logout/login, waits any remaining real
+   TTL without a deploy settle delay, restores through the UI, verifies the incremental behavior,
+   edits, downloads, validates in a clean directory, prints the final record, and deletes the
+   temporary Project.
 
 The exact ID is mandatory: resume never selects a Project by name or “latest” timestamp, so it cannot
 mutate or clean up an unrelated Project. If prepare fails before writing a valid checkpoint, its
 normal `finally` cleanup remains active. If a handled failure occurs after the checkpoint is printed,
-the exact checkpoint Project is retained for diagnosis or resume. Chromium startup is attempted
-twice, and any terminal error is logged in bounded, credential-redacted form before cleanup. The
-local `pnpm test:persistence` command defaults to the single-process `full` phase;
+the exact checkpoint Project is retained for diagnosis or resume. Resume failures also retain that
+exact Project, allowing another runtime/browser attempt without new Agent Runs. Chromium startup is
+attempted twice, and any terminal error is logged in bounded, credential-redacted form before
+cleanup. The local `pnpm test:persistence` command defaults to the single-process `full` phase;
 `E2E_PERSISTENCE_PHASE=full` can also be set explicitly.
 
 ## Automated evidence
@@ -80,9 +83,9 @@ once. The runner receives only the public Web URL, Firebase Browser key, dedicat
 credentials, phase, and the non-secret checkpoint Project ID. OpenAI, E2B, database, Firebase Admin,
 and Supabase Service Role credentials remain outside the runner.
 
-The prepare checkpoint is deliberately retained for resume. If resume is abandoned, delete that
-exact Project manually before starting another prepare deployment. Resume deletes the temporary
-Project on success and its normal `finally` cleanup deletes it on a handled failure. Afterward, use
-privileged read-only checks to correlate the production record with deployments, identify the exact
-unreferenced acceptance Sandboxes and Snapshot objects, and remove only those confirmed temporary
-resources.
+The prepare checkpoint is deliberately retained for resume. A failed resume also retains the same
+Project so browser/runtime defects do not force more model generation. If resume is abandoned,
+delete that exact Project manually before starting another prepare deployment. Resume deletes the
+temporary Project only after the complete final record passes. Afterward, use privileged read-only
+checks to correlate the production record with deployments, identify the exact unreferenced
+acceptance Sandboxes and Snapshot objects, and remove only those confirmed temporary resources.

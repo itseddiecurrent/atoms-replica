@@ -5,6 +5,7 @@ import {
   canonicalPreviewUrl,
   formatPreviewAcceptanceReport,
   launchBrowser,
+  textHasRemainingCount,
   validatePreviewAcceptanceEvidence
 } from "./preview-acceptance.mjs";
 
@@ -47,6 +48,12 @@ test("canonicalizes an E2B origin with or without its trailing slash", () => {
     canonicalPreviewUrl("https://5173-example.e2b.app"),
     canonicalPreviewUrl("https://5173-example.e2b.app/")
   );
+});
+
+test("recognizes remaining counts when the label and number are split across DOM lines", () => {
+  assert.equal(textHasRemainingCount("Remaining\n2", 2), true);
+  assert.equal(textHasRemainingCount("2\nitems left", 2), true);
+  assert.equal(textHasRemainingCount("Remaining\n1", 2), false);
 });
 
 test("requires every Todo interaction and count transition", () => {

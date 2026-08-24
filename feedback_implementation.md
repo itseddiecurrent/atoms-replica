@@ -245,6 +245,8 @@
 - 该布尔失败确认为 Gate 的渲染竞态：登录跳转刚到 `/projects` 即同步读取 `document.body`，早于服务端 Project 列表渲染；同一浏览器紧接着能够进入原 Project 并完整恢复 Workspace，证明并非认证或持久化丢失。Dashboard 验证现改为最长 30 秒显式等待精确 Project ID，并在过期恢复和昂贵的干净下载验证前立即失败；最终 Validator 同时新增可识别的断言消息与回归测试。
 - 修复后的下一次 `prepare` 再次完成两个真实 Runs，并到达增量浏览器验证入口，但 Railway 只保留到 `7/10 Verifying versions...` 的最后日志后将进程标记为失败；数据库中临时 Project 已被 `finally` 删除，证明是可捕获错误而非绕过清理的 `SIGKILL`，但 Node 默认在 `finally` 之后输出未处理异常，终端错误尾部未被 Deploy Logs 保存，无法可靠区分 Chromium 启动和页面断言。
 - Runner 现会在清理前输出长度受限且凭据脱敏的终端错误，并为 Chromium DevTools 启动提供两次确定性尝试及失败进程/Profile 清理。更重要的是，两个 Runs、Messages、Files、Plans、Snapshots 和 latest pointer 一经验证即先打印 Checkpoint 并启用精确 Project 保留，再进入任何 Chromium 检查；因此后续若仅浏览器失败，可用同一 Project 诊断或恢复，不再重复消耗两个生成 Runs。
+- 新 Checkpoint `0c6c12f1-2990-4591-949f-f7fd383ef419` 成功保留两个 Runs 与两个 Snapshots，证实提前保留边界生效；`resume` 随后从新容器完成登录与过期 Sandbox 恢复，但恢复后的 Todo 浏览器交互报错 `Remaining count did not reach two`。两条新 Todo 均已渲染，失败来自计数文案的 DOM 换行：增量脚本只在单行内匹配数字和 `remaining/left` 标签，而首次 Preview 脚本已有跨空白归一化 fallback。该次 `resume` 仍使用旧清理语义，因此 Project 已删除，尚未取得最终签收记录。
+- 两套 Todo 交互现共用同一可单元测试的计数匹配器，将换行和连续空白归一化后同时支持 `Remaining → 2` 与 `2 → items left`，并保留精确数字边界。Railway `prepare` 现在在 durable graph 后立即成功退出，不再在持有生成/SSE 状态的进程中启动 Chromium；`resume` 使用干净容器完成全部浏览器验证，且任何后续失败均保留精确 Checkpoint，只有完整最终记录通过才删除 Project。
 - 下一次线上验收须先以 `E2E_PERSISTENCE_PHASE=prepare` 部署并保存 Checkpoint，再在其真实过期时间后以 `resume` 和记录中的精确 `E2E_PERSISTENCE_PROJECT_ID` 重部署同一 commit。只有最终 `Persistence, Recovery, and Download Production Acceptance Record` 输出并自动清理 Project 后才能标记本步骤完成。
 
 ### Step 9：执行自动化生产 Smoke 与故障场景 ⬜ 待完成

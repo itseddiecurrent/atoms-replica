@@ -498,6 +498,7 @@ try {
     projectId = required("E2E_PERSISTENCE_PROJECT_ID");
     const beforeExpiry = await persistenceState();
     const checkpoint = resolvePersistenceCheckpoint(beforeExpiry);
+    preserveProject = true;
     assert.equal(
       checkpoint.projectId,
       projectId,
@@ -626,32 +627,41 @@ try {
               "       Durable checkpoint secured before browser verification; handled browser failures will preserve this Project."
             );
           }
-          console.info("       Starting Chromium incremental behavior verification...");
-          const browserEvidence = await runIncrementalPreviewBrowserAcceptance({
-            baseUrl,
-            projectId,
-            previewUrl: updated.previewUrl,
-            cookie,
-            expectedMessages: [fixedPrompt, followUpPrompt]
-          });
-          console.info("       Chromium incremental behavior verification passed.");
-          const preview = await fetch(updated.previewUrl, { signal: AbortSignal.timeout(30_000) });
-          const incrementalEvidence = validateIncrementalAcceptanceEvidence({
-            projectId,
-            initialRunId: created.body.runId,
-            followUpMessageId: followUp.body.messageId,
-            followUpRunId: followUp.body.runId,
-            initialSnapshotId,
-            followUpSnapshotId,
-            events: updated.events,
-            beforeFiles,
-            afterFiles,
-            previewUrl: updated.previewUrl,
-            previewHttpStatus: preview.status,
-            ...browserEvidence
-          });
-          console.info(formatIncrementalAcceptanceReport(incrementalEvidence));
-          if (persistenceOnly) {
+          if (persistenceOnly && persistencePhase === "prepare") {
+            console.info(
+              "Persistence prepare deployment passed at the durable checkpoint and preserved the exact Project for fresh-container browser verification."
+            );
+            process.exitCode = 0;
+          } else {
+            console.info("       Starting Chromium incremental behavior verification...");
+            const browserEvidence = await runIncrementalPreviewBrowserAcceptance({
+              baseUrl,
+              projectId,
+              previewUrl: updated.previewUrl,
+              cookie,
+              expectedMessages: [fixedPrompt, followUpPrompt]
+            });
+            console.info("       Chromium incremental behavior verification passed.");
+            const preview = await fetch(updated.previewUrl, {
+              signal: AbortSignal.timeout(30_000)
+            });
+            const incrementalEvidence = validateIncrementalAcceptanceEvidence({
+              projectId,
+              initialRunId: created.body.runId,
+              followUpMessageId: followUp.body.messageId,
+              followUpRunId: followUp.body.runId,
+              initialSnapshotId,
+              followUpSnapshotId,
+              events: updated.events,
+              beforeFiles,
+              afterFiles,
+              previewUrl: updated.previewUrl,
+              previewHttpStatus: preview.status,
+              ...browserEvidence
+            });
+            console.info(formatIncrementalAcceptanceReport(incrementalEvidence));
+          }
+          if (persistenceOnly && persistencePhase !== "prepare") {
             console.info("8/10 Verifying reload, logout/login, and complete server recovery...");
             const beforeExpiry = preparedState ?? (await persistenceState());
             const checkpoint = preparedCheckpoint ?? resolvePersistenceCheckpoint(beforeExpiry);
@@ -682,20 +692,8 @@ try {
             });
             cookie = relogin.cookie;
             const browser = { ...relogin, cookie: undefined };
-            if (persistencePhase === "prepare") {
-              console.info(
-                "Persistence prepare deployment passed reload/logout/login verification and preserved the exact checkpoint project."
-              );
-              process.exitCode = 0;
-            } else {
-              await completePersistenceAcceptance({
-                checkpoint,
-                browser,
-                beforeExpiry,
-                expectedInteractions: incrementalEvidence.interactions
-              });
-            }
-          } else {
+            await completePersistenceAcceptance({ checkpoint, browser, beforeExpiry });
+          } else if (!persistenceOnly) {
             console.info("Cleaning up the incremental acceptance project...");
             await jsonRequest(`/api/projects/${projectId}`, { method: "DELETE" });
             projectId = undefined;

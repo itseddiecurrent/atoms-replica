@@ -19,6 +19,18 @@ export function canonicalPreviewUrl(value) {
   return new URL(value).href;
 }
 
+export function textHasRemainingCount(value, expected) {
+  const label =
+    "remaining|left|incomplete|active|pending|outstanding|open|to do|todo|未完成|剩余|还剩|还有|待完成|待办";
+  const normalized = String(value).replace(/\s+/g, " ").trim();
+  return new RegExp(
+    `(?:${label})[^0-9]{0,30}${expected}(?:\\D|$)|(?:^|\\D)${expected}[^0-9]{0,30}(?:${label})`,
+    "i"
+  ).test(normalized);
+}
+
+const remainingCountMatcherSource = `(${textHasRemainingCount.toString()})`;
+
 export function resolveBrowserExecutable(env = process.env, platform = process.platform) {
   if (env.E2E_BROWSER_EXECUTABLE_PATH) {
     if (!existsSync(env.E2E_BROWSER_EXECUTABLE_PATH)) {
@@ -394,16 +406,16 @@ const todoInteractionScript = String.raw`(async () => {
     }
     throw new Error(message);
   };
+  const textHasRemainingCount = ${remainingCountMatcherSource};
   const remainingLine = (expected) => {
-    const label = "remaining|left|incomplete|active|pending|outstanding|open|to do|todo|未完成|剩余|还剩|还有|待完成|待办";
     const lines = document.body.innerText.split(/\n+/).map((line) => line.trim()).filter(Boolean);
     const accessible = all("[aria-label], [title]").flatMap((element) =>
       [element.getAttribute("aria-label"), element.title].filter(Boolean)
     );
-    const direct = [...lines, ...accessible].find((line) => new RegExp("(^|\\D)" + expected + "(\\D|$)").test(line) && new RegExp(label, "i").test(line));
+    const direct = [...lines, ...accessible].find((line) => textHasRemainingCount(line, expected));
     if (direct) return direct;
     const normalized = document.body.innerText.replace(/\s+/g, " ");
-    return normalized.match(new RegExp("(?:" + label + ")[^0-9]{0,30}" + expected + "(?:\\D|$)|(?:^|\\D)" + expected + "[^0-9]{0,30}(?:" + label + ")", "i"))?.[0];
+    return textHasRemainingCount(normalized, expected) ? normalized : undefined;
   };
   const itemContainer = (value) => {
     const leaf = all("body *").find((element) => [...element.childNodes].some((node) => node.nodeType === Node.TEXT_NODE && node.textContent.trim() === value));
@@ -527,15 +539,16 @@ export const incrementalInteractionScript = String.raw`(async () => {
     else input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true }));
     await pause(300);
   };
+  const textHasRemainingCount = ${remainingCountMatcherSource};
   const remainingLine = (expected) => {
-    const label = "remaining|left|incomplete|active|pending|outstanding|open|to do|todo|未完成|剩余|还剩|还有|待完成|待办";
     const lines = document.body.innerText.split(/\n+/).map((line) => line.trim()).filter(Boolean);
     const accessible = all("[aria-label], [title]").flatMap((element) =>
       [element.getAttribute("aria-label"), element.title].filter(Boolean)
     );
-    return [...lines, ...accessible].find((line) =>
-      new RegExp("(^|\\D)" + expected + "(\\D|$)").test(line) && new RegExp(label, "i").test(line)
-    );
+    const direct = [...lines, ...accessible].find((line) => textHasRemainingCount(line, expected));
+    if (direct) return direct;
+    const normalized = document.body.innerText.replace(/\s+/g, " ");
+    return textHasRemainingCount(normalized, expected) ? normalized : undefined;
   };
   const itemContainer = (value, includeHidden = false) => {
     const elements = [...document.querySelectorAll("body *")];
