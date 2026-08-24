@@ -184,6 +184,8 @@
 - 部署前还确认 Release gate 自首次提交起一直因两个 clean-checkout 问题失败：被跳过的 Supabase 集成测试仍过早解析密钥环境，且 Worker 测试前未构建 workspace packages。环境解析现延迟到集成 suite 真正运行时，根测试通过 `pretest` 先构建内部 packages；修复已在无 `.env` 的全新 Node 24 checkout 中通过，并由 GitHub Actions `30a914c` 首次取得成功终态。
 - v4 Runner 已确认执行新代码，但在首次生成阶段收到 `RUN_TIMEOUT / Worker heartbeat expired`。根因是已配置的 `RUN_HEARTBEAT_INTERVAL_MS=5000` 从未接入 Agent Run，长于 30 秒的模型/Sandbox 调用在滚动部署的新旧 Worker 重叠期会被误判为 stale。Worker 现从认领 Run 到最终 usage 记录持续发送 heartbeat，Railway Runner 也会在健康检查后等待 45 秒部署稳定窗口再创建验收项目。
 - v5 的 Railway 状态时间进一步证明部署竞态：Runner 于 08:21:59 启动并在 45 秒后放行，新 Worker 直到 08:22:53 才成功，旧 Worker 因而提前认领了 Run；Runner 在 stale 阈值后于 08:23:23 失败。Railway 默认稳定窗口现提高到 120 秒，覆盖本次实测 54 秒的服务启动差，并确保项目只在新 Worker 稳定轮询后创建。
+- v6 已证明首次生成、持续 heartbeat、独立验证、HTTPS Preview 和持久化成功，随后浏览器 Gate 暴露模型合理生成了 3 条示例 Todo，且计数文案使用 aria-label `还有 N 项未完成`/可见文案 `还剩 N 项任务`。Gate 现先通过 UI 清空种子任务，再严格执行两条添加及 `2 → 1 → 2 → 1`；计数识别同时覆盖可见与无障碍文案，不再假设固定 Prompt 必然生成空列表或某一种措辞。
+- 同一生产诊断还捕获到 Railway SSE socket 的真实传输中断；`consumeRun` 现对连接建立失败与 `reader.read()` 中断均使用最后一个 Event ID 自动恢复，保持事件去重与终态失败语义，不再因一次 `UND_ERR_SOCKET` 提前终止验收。
 
 ### Step 7：验收同一项目的增量修改 ⬜ 待完成
 

@@ -21,7 +21,7 @@ for (const path of [".env", ".env.test-account"]) {
 }
 
 const fixedPrompt = "创建一个带添加、完成和删除功能的 Todo App，并显示未完成数量。";
-const acceptanceRunnerRelease = "step6-browser-preview-interaction-v6";
+const acceptanceRunnerRelease = "step6-browser-preview-interaction-v7";
 const baseUrl = productionBaseUrl(required("E2E_BASE_URL"));
 const email = required("E2E_EMAIL");
 const password = required("E2E_PASSWORD");
@@ -86,23 +86,40 @@ async function consumeRun(runId, { reconnectAfterFirstEvent = false } = {}) {
       const controller = new AbortController();
       const remaining = Math.max(1, deadline - Date.now());
       const timeout = setTimeout(() => controller.abort(), remaining);
-      const response = await fetch(`${baseUrl}/api/runs/${runId}/events`, {
-        headers: {
-          Cookie: cookie,
-          Accept: "text/event-stream",
-          ...(lastEventId ? { "Last-Event-ID": String(lastEventId) } : {})
-        },
-        signal: controller.signal
-      });
+      let response;
+      try {
+        response = await fetch(`${baseUrl}/api/runs/${runId}/events`, {
+          headers: {
+            Cookie: cookie,
+            Accept: "text/event-stream",
+            ...(lastEventId ? { "Last-Event-ID": String(lastEventId) } : {})
+          },
+          signal: controller.signal
+        });
+      } catch (error) {
+        clearTimeout(timeout);
+        if (Date.now() >= deadline) throw error;
+        console.info(`       SSE connection interrupted; resuming after event ${lastEventId}.`);
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        continue;
+      }
       assert.equal(response.status, 200, `SSE returned ${response.status}`);
       assert.match(response.headers.get("content-type") ?? "", /text\/event-stream/);
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
       let forceReconnect = false;
+      let transportInterrupted = false;
       try {
         while (Date.now() < deadline) {
-          const { done, value } = await reader.read();
+          let packet;
+          try {
+            packet = await reader.read();
+          } catch {
+            transportInterrupted = true;
+            break;
+          }
+          const { done, value } = packet;
           if (done) break;
           buffer += decoder.decode(value, { stream: true });
           for (;;) {
@@ -135,6 +152,10 @@ async function consumeRun(runId, { reconnectAfterFirstEvent = false } = {}) {
       } finally {
         clearTimeout(timeout);
         await reader.cancel().catch(() => undefined);
+      }
+      if (transportInterrupted) {
+        console.info(`       SSE stream interrupted; resuming after event ${lastEventId}.`);
+        await new Promise((resolve) => setTimeout(resolve, 500));
       }
     }
     throw new Error(`Run ${runId} did not complete within ${maxWaitMs}ms.`);

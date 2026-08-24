@@ -12,8 +12,8 @@ then starts headless Chromium and verifies all of the following:
 1. The generated HTTPS Preview returns HTTP 200 and is automatically present in the authenticated
    workspace iframe.
 2. Reloading the workspace restores the same server-persisted Preview URL and loads it again.
-3. Empty submission is rejected; two Todos can be added; one can be completed and restored; the
-   other can be deleted.
+3. Any model-generated seed Todos are first deleted through the UI. Empty submission is rejected;
+   two Todos can then be added; one can be completed and restored; the other can be deleted.
 4. The unfinished counter follows `2 → 1 → 2 → 1` and the Todo operations issue no remote mutation
    requests, confirming browser-local state.
 5. Chromium observes no CSP, mixed-content, origin, or frame-blocking failure.
@@ -63,7 +63,7 @@ same browser Gate once with `restartPolicyType: NEVER`. Configure only:
 Do not give this service database, Supabase service-role, Firebase Admin, OpenAI, or E2B keys. A
 successful Deploy Log ends with `Preview production acceptance passed` and contains a
 `Preview Production Acceptance Record`. The first lines must identify release
-`step6-browser-preview-interaction-v6` and the Railway source commit; reject logs from an older
+`step6-browser-preview-interaction-v7` and the Railway source commit; reject logs from an older
 release even if they were produced by manually restarting an earlier deployment.
 
 ## Log boundary check

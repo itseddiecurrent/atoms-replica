@@ -368,9 +368,12 @@ const todoInteractionScript = String.raw`(async () => {
     throw new Error(message);
   };
   const remainingLine = (expected) => {
-    const label = "remaining|left|incomplete|active|pending|outstanding|open|to do|todo|未完成|剩余|待完成|待办";
+    const label = "remaining|left|incomplete|active|pending|outstanding|open|to do|todo|未完成|剩余|还剩|还有|待完成|待办";
     const lines = document.body.innerText.split(/\n+/).map((line) => line.trim()).filter(Boolean);
-    const direct = lines.find((line) => new RegExp("(^|\\D)" + expected + "(\\D|$)").test(line) && new RegExp(label, "i").test(line));
+    const accessible = all("[aria-label], [title]").flatMap((element) =>
+      [element.getAttribute("aria-label"), element.title].filter(Boolean)
+    );
+    const direct = [...lines, ...accessible].find((line) => new RegExp("(^|\\D)" + expected + "(\\D|$)").test(line) && new RegExp(label, "i").test(line));
     if (direct) return direct;
     const normalized = document.body.innerText.replace(/\s+/g, " ");
     return normalized.match(new RegExp("(?:" + label + ")[^0-9]{0,30}" + expected + "(?:\\D|$)|(?:^|\\D)" + expected + "[^0-9]{0,30}(?:" + label + ")", "i"))?.[0];
@@ -403,9 +406,29 @@ const todoInteractionScript = String.raw`(async () => {
     control.click();
     await pause(250);
   };
+  const clearExistingTodos = async () => {
+    for (let index = 0; index < 50; index += 1) {
+      const labeled = buttons().find((element) =>
+        /(delete|remove|trash|删除|移除)/i.test(text(element) || element.getAttribute("aria-label") || element.title || "")
+      );
+      const container = all('li, [role="listitem"]').find((element) =>
+        element.querySelector('button, [role="button"]')
+      );
+      const controls = container
+        ? [...container.querySelectorAll('button, [role="button"]')].filter(visible)
+        : [];
+      const fallback = controls.length > 1 ? controls.at(-1) : undefined;
+      const control = labeled || fallback;
+      if (!control) return;
+      control.click();
+      await pause(250);
+    }
+    throw new Error("Todo Preview seed items could not be cleared.");
+  };
 
   const first = "Preview acceptance alpha";
   const second = "Preview acceptance beta";
+  await clearExistingTodos();
   setInput("");
   await submit();
   const emptyRejected = Boolean(remainingLine(0)) && !remainingLine(1) && input.value.trim() === "";
