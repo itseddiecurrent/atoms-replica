@@ -222,7 +222,7 @@
 - 增量 Run 仅改变 `index.html`、`src/App.test.tsx`、`src/App.tsx` 和 `src/styles.css`，9 个未修改文件保持原版本；独立安装与 build 均 exit 0，更新后的 HTTPS Preview HTTP 200，标题、三个筛选按钮与全部原 Todo 行为通过，Workspace 对话连续，浏览器安全错误和远程 Mutation Request 均为 0。
 - Gate 在成功后自动删除临时 Project 与数据库/Snapshot 记录；随后只读核对确认两个本轮临时 Sandbox 均无 Project 引用，并已按精确 Sandbox ID 释放，不保留额外 E2B 运行成本。至此 Step 7 的代码、版本、消息、Run、Snapshot、Preview 行为与资源清理证据全部齐全，正式通过。
 
-### Step 8：验收持久化、恢复与下载 ⬜ 待完成
+### Step 8：验收持久化、恢复与下载 ✅ 已完成
 
 1. 在增量修改完成后刷新页面并重新登录，确认项目仍出现在 Dashboard。
 2. 确认对话、计划、最终状态、文件树、文件内容、文件版本和 Preview URL 均能从服务端恢复。
@@ -247,7 +247,10 @@
 - Runner 现会在清理前输出长度受限且凭据脱敏的终端错误，并为 Chromium DevTools 启动提供两次确定性尝试及失败进程/Profile 清理。更重要的是，两个 Runs、Messages、Files、Plans、Snapshots 和 latest pointer 一经验证即先打印 Checkpoint 并启用精确 Project 保留，再进入任何 Chromium 检查；因此后续若仅浏览器失败，可用同一 Project 诊断或恢复，不再重复消耗两个生成 Runs。
 - 新 Checkpoint `0c6c12f1-2990-4591-949f-f7fd383ef419` 成功保留两个 Runs 与两个 Snapshots，证实提前保留边界生效；`resume` 随后从新容器完成登录与过期 Sandbox 恢复，但恢复后的 Todo 浏览器交互报错 `Remaining count did not reach two`。两条新 Todo 均已渲染，失败来自计数文案的 DOM 换行：增量脚本只在单行内匹配数字和 `remaining/left` 标签，而首次 Preview 脚本已有跨空白归一化 fallback。该次 `resume` 仍使用旧清理语义，因此 Project 已删除，尚未取得最终签收记录。
 - 两套 Todo 交互现共用同一可单元测试的计数匹配器，将换行和连续空白归一化后同时支持 `Remaining → 2` 与 `2 → items left`，并保留精确数字边界。Railway `prepare` 现在在 durable graph 后立即成功退出，不再在持有生成/SSE 状态的进程中启动 Chromium；`resume` 使用干净容器完成全部浏览器验证，且任何后续失败均保留精确 Checkpoint，只有完整最终记录通过才删除 Project。
-- 下一次线上验收须先以 `E2E_PERSISTENCE_PHASE=prepare` 部署并保存 Checkpoint，再在其真实过期时间后以 `resume` 和记录中的精确 `E2E_PERSISTENCE_PROJECT_ID` 重部署同一 commit。只有最终 `Persistence, Recovery, and Download Production Acceptance Record` 输出并自动清理 Project 后才能标记本步骤完成。
+- 最终生产验收由 Runner commit `779c8ea` 完成。Project `dbcb8091-b3cd-45c9-a5b8-e8005d8ae04e` 的首次 Run `20054157-0d86-467e-bf60-b3f32cc03396` 与增量 Run `6a7bd60f-212a-44ef-9c4a-d084ab1b1a1c` 均为带计划的 `completed`；Snapshot 从 `13452aae-0c9e-4074-ab55-9f4ae276d7b9` 推进至 `2596ab6e-fd16-4ce5-bda1-955d3101dfe0`，latest pointer 有效，原 Sandbox 在 `2026-08-24T13:33:29.948Z` 真实过期后恢复到不同 Sandbox。
+- 最终 `Persistence, Recovery, and Download Production Acceptance Record` 已证明页面刷新与专用账号真实退出/重新登录后，Dashboard、对话、计划、Running 终态、文件树、非空源码、文件版本和 Preview URL 全部恢复；恢复后的 Preview 保留 Focus Todo 标题、All/Active/Completed 筛选与原 Todo 行为。IDE 对 `src/styles.css` 的可见修改通过 `sync_file` Runtime Job 完成并更新 Preview，浏览器安全错误与远程 Mutation Request 均为 0。
+- 下载 ZIP 与最终服务端全部 Project Files 精确一致，不含 `.env`、`node_modules`、`dist`、缓存、coverage 或 Git 数据；在全新临时目录中的 `npm install`、production build、tests、独立 Vite server 和 Chromium Todo 交互全部通过。最终 Validator 同时确认 Messages、Runs、Project Files、Snapshots、latest pointer 与 Runtime Jobs 无缺失引用或活动孤儿状态，Runner 输出 `Persistence, recovery, and download production acceptance passed.`。
+- Runner 随后自动删除临时 Project；特权只读复核确认 Project、Runs、Messages、Snapshots、Project Files 和 Runtime Jobs 均为 0 条残留。按精确 Project/Run 前缀识别并删除两个已无数据库引用的私有 Snapshot ZIP（93,415 与 95,966 bytes）后，该 Storage prefix 为空；E2B Sandbox 继续受真实 TTL 自动释放。至此 Step 8 的跨会话持久化、过期恢复、IDE 同步、下载独立运行、引用一致性与资源清理证据全部齐全，正式通过。
 
 ### Step 9：执行自动化生产 Smoke 与故障场景 ⬜ 待完成
 
