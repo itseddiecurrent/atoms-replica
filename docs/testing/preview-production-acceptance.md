@@ -34,7 +34,7 @@ server. Failed Runtime Jobs persist a source-free stage code such as
 `PREVIEW_START_FAILED`, or `PREVIEW_HEALTH_FAILED`; the workspace and Gate display that code
 without exposing the provider response, generated source, or credentials. A reconnect also waits
 for the Sandbox environment health endpoint before using its filesystem, and the idempotent
-Preview launcher write has a short bounded retry for a transient resume race.
+Preview launcher write has ten bounded attempts over approximately 25 seconds for a resume race.
 
 The generated Project is deleted in `finally`, including when an assertion fails. The evidence
 record contains IDs, statuses, and behavioral results only; it never prints the session cookie,
@@ -72,7 +72,7 @@ same browser Gate once with `restartPolicyType: NEVER`. Configure only:
 Do not give this service database, Supabase service-role, Firebase Admin, OpenAI, or E2B keys. A
 successful Deploy Log ends with `Preview production acceptance passed` and contains a
 `Preview Production Acceptance Record`. The first lines must identify release
-`step6-browser-preview-interaction-v9` and the Railway source commit; reject logs from an older
+`step6-browser-preview-interaction-v10` and the Railway source commit; reject logs from an older
 release even if they were produced by manually restarting an earlier deployment.
 
 ## Log boundary check

@@ -54,7 +54,7 @@ async function retrySandboxStage<T>(
   code: SandboxLifecycleErrorCode,
   message: string,
   operation: () => Promise<T>,
-  attempts = 3
+  attempts = 10
 ): Promise<T> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {

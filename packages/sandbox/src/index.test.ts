@@ -345,6 +345,29 @@ describe("E2BSandboxAdapter", () => {
     expect(sandbox.files.write).toHaveBeenCalledTimes(2);
   });
 
+  it("keeps the Preview launcher retry bounded when the filesystem remains unavailable", async () => {
+    vi.useFakeTimers();
+    try {
+      const sandbox = fakeSandbox();
+      sandbox.files.write = vi.fn().mockRejectedValue(new Error("environment not ready"));
+      const adapter = new E2BSandboxAdapter({
+        sdk: { create: vi.fn(), connect: vi.fn(async () => sandbox) }
+      });
+      await adapter.connect("sb-test");
+
+      const starting = expect(adapter.startDevServer()).rejects.toMatchObject({
+        code: "PREVIEW_PREPARE_FAILED"
+      });
+      await vi.runAllTimersAsync();
+
+      await starting;
+      expect(sandbox.files.write).toHaveBeenCalledTimes(10);
+      expect(sandbox.commands.run).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("restarts Vite on the configured preview port", async () => {
     const sandbox = fakeSandbox();
     const adapter = new E2BSandboxAdapter({
