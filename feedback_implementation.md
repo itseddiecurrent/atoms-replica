@@ -183,6 +183,7 @@
 - 随后的 crash 堆栈仍指向旧版 Runner 的第 619 行，证明 Railway 重启了旧 deployment，而非执行上述修复提交。Runner 现自报 release 与 `RAILWAY_GIT_COMMIT_SHA`，并通过 acceptance 配置变更强制 Web、Worker、Runner 同 commit 重新部署；同时将 Restart 等待预算扩展为 6 分钟，以覆盖 Sandbox 过期后最长 120 秒依赖安装与 120 秒 Preview 健康检查，连接仍存活的 E2B Sandbox 时会续租 TTL 并刷新数据库到期时间。
 - 部署前还确认 Release gate 自首次提交起一直因两个 clean-checkout 问题失败：被跳过的 Supabase 集成测试仍过早解析密钥环境，且 Worker 测试前未构建 workspace packages。环境解析现延迟到集成 suite 真正运行时，根测试通过 `pretest` 先构建内部 packages；修复已在无 `.env` 的全新 Node 24 checkout 中通过，并由 GitHub Actions `30a914c` 首次取得成功终态。
 - v4 Runner 已确认执行新代码，但在首次生成阶段收到 `RUN_TIMEOUT / Worker heartbeat expired`。根因是已配置的 `RUN_HEARTBEAT_INTERVAL_MS=5000` 从未接入 Agent Run，长于 30 秒的模型/Sandbox 调用在滚动部署的新旧 Worker 重叠期会被误判为 stale。Worker 现从认领 Run 到最终 usage 记录持续发送 heartbeat，Railway Runner 也会在健康检查后等待 45 秒部署稳定窗口再创建验收项目。
+- v5 的 Railway 状态时间进一步证明部署竞态：Runner 于 08:21:59 启动并在 45 秒后放行，新 Worker 直到 08:22:53 才成功，旧 Worker 因而提前认领了 Run；Runner 在 stale 阈值后于 08:23:23 失败。Railway 默认稳定窗口现提高到 120 秒，覆盖本次实测 54 秒的服务启动差，并确保项目只在新 Worker 稳定轮询后创建。
 
 ### Step 7：验收同一项目的增量修改 ⬜ 待完成
 

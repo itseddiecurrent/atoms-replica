@@ -21,14 +21,14 @@ for (const path of [".env", ".env.test-account"]) {
 }
 
 const fixedPrompt = "创建一个带添加、完成和删除功能的 Todo App，并显示未完成数量。";
-const acceptanceRunnerRelease = "step6-browser-preview-interaction-v5";
+const acceptanceRunnerRelease = "step6-browser-preview-interaction-v6";
 const baseUrl = productionBaseUrl(required("E2E_BASE_URL"));
 const email = required("E2E_EMAIL");
 const password = required("E2E_PASSWORD");
 const firebaseApiKey = process.env.E2E_FIREBASE_API_KEY ?? required("NEXT_PUBLIC_FIREBASE_API_KEY");
 const maxWaitMs = Number(process.env.E2E_MAX_WAIT_MS ?? 12 * 60_000);
 const deploySettleMs = Number(
-  process.env.E2E_DEPLOY_SETTLE_MS ?? (process.env.RAILWAY_GIT_COMMIT_SHA ? 45_000 : 0)
+  process.env.E2E_DEPLOY_SETTLE_MS ?? (process.env.RAILWAY_GIT_COMMIT_SHA ? 120_000 : 0)
 );
 const initialOnly = process.env.E2E_INITIAL_ONLY === "true";
 const previewOnly = process.env.E2E_PREVIEW_ONLY === "true";
