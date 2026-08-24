@@ -3,6 +3,10 @@
 Run this after Web and Worker are both live and the automated `pnpm test:smoke` gate passes. Use a
 new or dedicated email/password account so limits and old data cannot hide defects.
 
+Before the live generation flow, complete the read-only production baseline gate in
+`docs/testing/production-baseline.md`. It freezes the public URL, Git commit, Web/Worker deployments,
+database health, Worker polling confirmation, and Firebase auth confirmation for the evidence set.
+
 For the pre-Step-15 local candidate, use Node 24, add the three `E2E_*` values to the ignored local
 `.env`, then run the one-command launcher. It validates the complete Web/Worker environment, selects
 the Homebrew Node 24 binary when available, installs the locked dependencies, applies pending
