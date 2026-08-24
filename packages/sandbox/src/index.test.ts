@@ -216,6 +216,9 @@ describe("E2BSandboxAdapter", () => {
       path === SANDBOX_WORKDIR
         ? [
             { path: `${SANDBOX_WORKDIR}/src`, type: "dir" },
+            { path: `${SANDBOX_WORKDIR}/node_modules`, type: "dir" },
+            { path: `${SANDBOX_WORKDIR}/dist`, type: "dir" },
+            { path: `${SANDBOX_WORKDIR}/.env`, type: "file" },
             { path: `${SANDBOX_WORKDIR}/package.json`, type: "file" }
           ]
         : [{ path: `${SANDBOX_WORKDIR}/src/App.tsx`, type: "file" }]
@@ -226,6 +229,9 @@ describe("E2BSandboxAdapter", () => {
     await adapter.connect("sb-test");
 
     await expect(adapter.listFiles()).resolves.toEqual(["package.json", "src/App.tsx"]);
+    expect(sandbox.files.list).toHaveBeenCalledTimes(2);
+    expect(sandbox.files.list).not.toHaveBeenCalledWith(`${SANDBOX_WORKDIR}/node_modules`);
+    expect(sandbox.files.list).not.toHaveBeenCalledWith(`${SANDBOX_WORKDIR}/dist`);
   });
 
   it("starts Vite in the background and waits for a healthy preview", async () => {

@@ -6,6 +6,7 @@ export const SANDBOX_WORKDIR = "/home/user/app";
 export const SANDBOX_INSTALL_COMMAND = "npm install --no-audit --no-fund";
 export const SANDBOX_BUILD_COMMAND = "npm run build";
 const SANDBOX_PREVIEW_SERVER_PATH = "/tmp/atom-replica-preview.mjs";
+const SANDBOX_IGNORED_SEGMENTS = new Set(["node_modules", ".git", "dist", ".vite", "coverage"]);
 export const SANDBOX_PREVIEW_SERVER_SOURCE = `import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import { createServer } from "node:http";
@@ -337,6 +338,14 @@ export class E2BSandboxAdapter implements SandboxAdapter {
         : path === "." || rawPath.startsWith(`${path}/`)
           ? rawPath
           : `${path}/${rawPath}`;
+      const segments = relativePath.split("/");
+      const name = segments.at(-1) ?? "";
+      if (
+        segments.some((segment) => SANDBOX_IGNORED_SEGMENTS.has(segment)) ||
+        name === ".env" ||
+        name.startsWith(".env.")
+      )
+        continue;
       if (entry.type === "dir" || entry.type === "directory") {
         files.push(...(await this.listFiles(relativePath)));
       } else {

@@ -151,6 +151,7 @@
 - 首次 Railway Runner 已证明登录、Project/Run 创建、SSE 重连、真实模型生成、依赖安装与 production build 均已执行，但 Preview 健康检查持续收到 E2B HTTP 502，Run 以 `SANDBOX_FAILED` 明确终止，因此本步骤尚未通过线上验收。
 - 针对该失败，Sandbox Preview 改为直接启动已安装的 Vite 二进制，固定 `0.0.0.0` 并启用 `--strictPort`，同时保留后台进程句柄、限制单次公网探测时间，并在失败时报告 Sandbox 内部 HTTP 探测、进程退出码和受长度限制的启动日志。部署后必须由 Railway Runner 重新获得 `run.completed`、HTTPS Preview 和完整证据记录，才能将本步骤标记为完成。
 - 上述诊断随后确认 E2B 默认 Template 实际为 Node 20.9.0，而 Vite 7 dev server 要求 Node 20.19+，因此 production build 虽通过，Preview 仍会在依赖优化阶段因缺少 `crypto.hash` 退出。Preview 已进一步改为使用 Node 内置 HTTP 模块直接服务独立验证后的 `dist`，不再让生产 Preview 依赖 Vite dev runtime 或更高 Node minor；同一端口上的旧 Preview 会在启动前确定性停止。
+- Preview 修复后的线上 Run 已到达 95% 文件/Snapshot 保存，但暴露出文件枚举先递归整个 `node_modules` 和 `dist`、再执行归档过滤的远程调用放大问题。Sandbox 文件树现已在递归入口剪枝依赖、构建、缓存、Git、coverage 和 `.env` 路径，只枚举并持久化真实项目源码。
 
 ### Step 6：验收 Preview 首次启动与交互 ⬜ 待完成
 
