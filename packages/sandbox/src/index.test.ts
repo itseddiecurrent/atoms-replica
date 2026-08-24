@@ -323,6 +323,12 @@ describe("E2BSandboxAdapter", () => {
       "pkill -f '/tmp/[a]tom-replica-preview.mjs 5173' || true",
       "node /tmp/atom-replica-preview.mjs 5173"
     ]);
+    expect(vi.mocked(sandbox.commands.run).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(sandbox.files.remove).mock.invocationCallOrder[0]!
+    );
+    expect(vi.mocked(sandbox.files.remove).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(sandbox.files.write).mock.invocationCallOrder[0]!
+    );
     expect(sandbox.files.write).toHaveBeenCalledWith(
       "/tmp/atom-replica-preview.mjs",
       expect.stringContaining('from "node:http"')
@@ -345,6 +351,24 @@ describe("E2BSandboxAdapter", () => {
     expect(sandbox.files.write).toHaveBeenCalledTimes(2);
   });
 
+  it("starts Preview when no previous launcher file exists", async () => {
+    const sandbox = fakeSandbox();
+    sandbox.files.remove = vi
+      .fn()
+      .mockRejectedValue(Object.assign(new Error("missing"), { name: "FileNotFoundError" }));
+    const adapter = new E2BSandboxAdapter({
+      sdk: { create: vi.fn(), connect: vi.fn(async () => sandbox) }
+    });
+    await adapter.connect("sb-test");
+
+    await adapter.startDevServer();
+
+    expect(sandbox.files.write).toHaveBeenCalledWith(
+      "/tmp/atom-replica-preview.mjs",
+      SANDBOX_PREVIEW_SERVER_SOURCE
+    );
+  });
+
   it("keeps the Preview launcher retry bounded when the filesystem remains unavailable", async () => {
     vi.useFakeTimers();
     try {
@@ -362,7 +386,9 @@ describe("E2BSandboxAdapter", () => {
 
       await starting;
       expect(sandbox.files.write).toHaveBeenCalledTimes(10);
-      expect(sandbox.commands.run).not.toHaveBeenCalled();
+      expect(sandbox.commandsRun.map(([command]) => command)).toEqual([
+        "pkill -f '/tmp/[a]tom-replica-preview.mjs 5173' || true"
+      ]);
     } finally {
       vi.useRealTimers();
     }

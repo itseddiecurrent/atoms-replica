@@ -1,6 +1,6 @@
 import { readdir, readFile as readLocalFile, lstat } from "node:fs/promises";
 import { join, relative, resolve, sep } from "node:path";
-import { Sandbox } from "e2b";
+import { FileNotFoundError, Sandbox } from "e2b";
 
 export const SANDBOX_WORKDIR = "/home/user/app";
 export const SANDBOX_INSTALL_COMMAND = "npm install --no-audit --no-fund";
@@ -19,6 +19,7 @@ export const sandboxLifecycleErrorCodes = {
   SANDBOX_RESTORE_BUILD_FAILED: "SANDBOX_RESTORE_BUILD_FAILED",
   PREVIEW_PREPARE_FAILED: "PREVIEW_PREPARE_FAILED",
   PREVIEW_STOP_FAILED: "PREVIEW_STOP_FAILED",
+  PREVIEW_REMOVE_FAILED: "PREVIEW_REMOVE_FAILED",
   PREVIEW_START_FAILED: "PREVIEW_START_FAILED",
   PREVIEW_HEALTH_FAILED: "PREVIEW_HEALTH_FAILED"
 } as const;
@@ -560,6 +561,29 @@ export class E2BSandboxAdapter implements SandboxAdapter {
         Math.min(this.options.maxOutputChars, 2_000)
       );
     };
+    await sandboxStage(
+      sandboxLifecycleErrorCodes.PREVIEW_STOP_FAILED,
+      "Could not stop the previous Preview process.",
+      () =>
+        this.requireSandbox().commands.run(
+          `pkill -f '/tmp/[a]tom-replica-preview.mjs ${port}' || true`,
+          { cwd: SANDBOX_WORKDIR, timeoutMs: 10_000 }
+        )
+    );
+    await sandboxStage(
+      sandboxLifecycleErrorCodes.PREVIEW_REMOVE_FAILED,
+      "Could not remove the previous Preview launcher.",
+      async () => {
+        try {
+          await this.requireSandbox().files.remove(SANDBOX_PREVIEW_SERVER_PATH);
+        } catch (error) {
+          const record =
+            error && typeof error === "object" ? (error as Record<string, unknown>) : {};
+          if (!(error instanceof FileNotFoundError) && record.name !== "FileNotFoundError")
+            throw error;
+        }
+      }
+    );
     await retrySandboxStage(
       sandboxLifecycleErrorCodes.PREVIEW_PREPARE_FAILED,
       "Could not prepare the Preview server.",
@@ -568,15 +592,6 @@ export class E2BSandboxAdapter implements SandboxAdapter {
           this.requireSandbox()
             .files.write(SANDBOX_PREVIEW_SERVER_PATH, SANDBOX_PREVIEW_SERVER_SOURCE)
             .then(() => undefined)
-        )
-    );
-    await sandboxStage(
-      sandboxLifecycleErrorCodes.PREVIEW_STOP_FAILED,
-      "Could not stop the previous Preview process.",
-      () =>
-        this.requireSandbox().commands.run(
-          `pkill -f '/tmp/[a]tom-replica-preview.mjs ${port}' || true`,
-          { cwd: SANDBOX_WORKDIR, timeoutMs: 10_000 }
         )
     );
     const process = await sandboxStage(
