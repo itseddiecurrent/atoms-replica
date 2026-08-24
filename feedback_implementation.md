@@ -1,4 +1,4 @@
-# Feedback Implementation Plan
+# Feedback Implementation Plan ✅ 已完成
 
 ## 1. 当前反馈与目标
 
@@ -7,14 +7,11 @@
 - 注册、登录和项目入口可以使用。
 - 代码结构较完整，Web、Worker、数据库、Sandbox 和测试边界已经建立。
 
-当前尚未完成线上验收：
+当前线上验收状态：
 
-- 公开生产环境中的真实 AI 生成。
-- 同一项目内的增量修改。
-- Preview 的首次启动、更新、重启与恢复。
-- 消息、代码、运行状态、Preview 和 Snapshot 的持久化。
-- 专用测试账号交付。
-- 服务端模型、调用额度和 Sandbox 运行额度确认。
+- Step 1–9 的真实生产验收、故障场景、安全隔离和资源清理均已通过。
+- Step 10 的脱敏证据汇总、公开交付摘要和无本地环境复现清单均已完成。
+- 当前没有失败、待重验或阻塞的反馈项。
 
 本方案的目标是取得一套可复现、可审计的生产验收证据，证明用户可以通过公开 URL 完成“登录 → 创建项目 → 真实生成 → Preview 操作 → 增量修改 → 刷新恢复 → 下载”的完整闭环。
 
@@ -277,7 +274,7 @@
 - 目标 Web/Worker commit `6af8d03b1ac6d9ec3de18e7a6f50467d48f92754` 的 GitHub Actions Run `32736663205` 成功，公开 URL 健康且数据库为 `ok`。最终 `Automated Production Smoke and Fault Acceptance Record` 生成于 `2026-08-24T14:32:02.825Z`：完成 Project `3b5cdde5-1c99-4608-948d-c5d8f5871a38` / Run `6051bc84-7b85-4a84-af72-5882b3dc2cda` 保存 13 个文件、Preview HTTP 200、ZIP 92,346 bytes；取消 Project `f36ed46c-a0c2-4d45-9be3-1ec1162e23b9` / Run `6b52b9e3-288b-42dd-a565-a651ec7a2774` 正确进入 `RUN_CANCELLED`。
 - 两个最终验收 Project 的 durable cleanup jobs 均完成，Dashboard 不再包含其 ID，第二测试账号已删除；最终全局资源复核时间为 `2026-08-24T14:32:33.915Z`。Runner 的额外断线恢复、失败清理和数量化资源审计固化于 commit `5d580de`，至此 Step 9 的生产 Smoke、关键故障分类、越权隔离和资源清理证据全部齐全，正式通过。
 
-### Step 10：整理证据并完成反馈签收 ⬜ 待完成
+### Step 10：整理证据并完成反馈签收 ✅ 已完成
 
 1. 汇总公开 URL、GitHub URL、commit SHA、Web/Worker deployment ID 和验收时间。
 2. 提供专用测试账号的安全交付说明，不在报告中写出密码。
@@ -288,6 +285,15 @@
 7. 将最终验收摘要加入交付文档，并保留下一次部署可重复使用的测试账号与检查清单。
 
 验收标准：评审人员无需本地环境即可使用公开 URL 和专用账号复现完整流程；所有反馈项都有明确证据，不再使用“代码已实现”代替“线上已验收”。
+
+#### 完成总结
+
+- 已新增 `docs/testing/final-production-acceptance.md`，将 Step 1–9 的脱敏线上记录合并为单一签收材料，包含公开 URL、GitHub repository、生产 commit、Release gate、Web/Worker deployment ID、验收时间、健康状态、测试账号安全交付、模型与 Sandbox 非敏感配置。
+- 最终生产基线于 `2026-08-24T14:55:04.483Z` 重新验证：公开首页、登录页和 `/api/health` 均为 HTTP 200，数据库为 `ok`；生产 commit `c2368c08732283117c322d57a000749b69934854` 的 GitHub Actions `32739541925` 成功，Web deployment 为 `b75be1a8-ce6b-4de6-b89e-26c14a90f3bf`，Worker deployment 为 `86b6f5b3-e9e4-46d5-bd81-78632bbef921`。
+- 汇总记录明确关联首次生成、Preview、增量修改、持久化/过期恢复/IDE 同步/下载和自动化 Smoke 的 Project、Run、Snapshot、Runtime Job、时间及最终结果；临时资源已清理，但 ID 保留用于与 Railway 脱敏日志关联。
+- 已将历次未通过项按负责组件、修复范围、重新验收步骤和最终状态整理为闭环表；E2B 502/Node 兼容、Restart 恢复、Railway 长时验收、DOM 竞态、删除资源泄漏和 Smoke 重连/清理均为 `Resolved`，当前无失败、ownerless 或 blocked 项。
+- README 已公布生产 URL 并链接最终签收材料。最终文档同时提供只使用公开 URL 和专用账号即可执行的浏览器复现步骤，以及下一次部署必须重新生成 commit-matched 证据、不得复用本轮 ID 的检查清单。
+- 报告不包含密码、Cookie、API Key、完整 Prompt 日志、生成源码、Sandbox ID 或私有 Snapshot key；测试账号密码继续只通过密码管理器或一次性加密链接交付。至此十项最终完成标准全部满足，本轮反馈正式签收。
 
 ## 4. 必须交付的验收材料
 

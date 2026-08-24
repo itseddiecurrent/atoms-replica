@@ -6,7 +6,10 @@ preview, requests follow-up changes, edits generated files, and downloads the re
 
 Repository: <https://github.com/itseddiecurrent/atoms-replica>
 
-The public Railway URL will be added after the Step 15 deployment and production smoke test.
+Production: <https://web-production-8c2330.up.railway.app>
+
+The complete sanitized production sign-off is in
+[`docs/testing/final-production-acceptance.md`](./docs/testing/final-production-acceptance.md).
 
 ## Architecture
 
@@ -68,6 +71,8 @@ For a read-only prerequisite check:
   [`docs/testing/persistence-production-acceptance.md`](./docs/testing/persistence-production-acceptance.md)
 - Automated production smoke, fault, authorization, and cleanup acceptance:
   [`docs/testing/automated-production-smoke.md`](./docs/testing/automated-production-smoke.md)
+- Final production acceptance and reviewer handoff:
+  [`docs/testing/final-production-acceptance.md`](./docs/testing/final-production-acceptance.md)
 
 Railway deploys this monorepo as two services from `main`:
 
