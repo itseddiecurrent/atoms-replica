@@ -243,6 +243,8 @@
 - Railway `resume` 不再重复 120 秒部署稳定等待；本地 `pnpm test:persistence` 仍默认支持单进程 `full` Gate。恢复阶段新增边界日志，明确区分“已到达真实过期”“恢复完成”“IDE Runtime Job”和“干净下载验证”，避免下次失败只留下一个合并阶段名称。
 - Checkpoint Runner commit `7135ab927c31c97507b6b3b6077011921eec2d32` 已在线完成 `prepare`：Project `8ff39ebf-4e1a-4140-8788-813b0bd8e2ab` 的两个 Runs 与两个 Snapshots 均为完整终态，13 个文件已保存，原 Sandbox 真实过期时间为 `2026-08-24T11:40:59.030Z`。随后的 `resume` 已执行恢复、IDE 同步、下载和干净项目验证，但最终证据校验发现重新登录后 Dashboard 的 Project 布尔值为 `false`，因此仍未签收；临时 Project 已按预期清理。
 - 该布尔失败确认为 Gate 的渲染竞态：登录跳转刚到 `/projects` 即同步读取 `document.body`，早于服务端 Project 列表渲染；同一浏览器紧接着能够进入原 Project 并完整恢复 Workspace，证明并非认证或持久化丢失。Dashboard 验证现改为最长 30 秒显式等待精确 Project ID，并在过期恢复和昂贵的干净下载验证前立即失败；最终 Validator 同时新增可识别的断言消息与回归测试。
+- 修复后的下一次 `prepare` 再次完成两个真实 Runs，并到达增量浏览器验证入口，但 Railway 只保留到 `7/10 Verifying versions...` 的最后日志后将进程标记为失败；数据库中临时 Project 已被 `finally` 删除，证明是可捕获错误而非绕过清理的 `SIGKILL`，但 Node 默认在 `finally` 之后输出未处理异常，终端错误尾部未被 Deploy Logs 保存，无法可靠区分 Chromium 启动和页面断言。
+- Runner 现会在清理前输出长度受限且凭据脱敏的终端错误，并为 Chromium DevTools 启动提供两次确定性尝试及失败进程/Profile 清理。更重要的是，两个 Runs、Messages、Files、Plans、Snapshots 和 latest pointer 一经验证即先打印 Checkpoint 并启用精确 Project 保留，再进入任何 Chromium 检查；因此后续若仅浏览器失败，可用同一 Project 诊断或恢复，不再重复消耗两个生成 Runs。
 - 下一次线上验收须先以 `E2E_PERSISTENCE_PHASE=prepare` 部署并保存 Checkpoint，再在其真实过期时间后以 `resume` 和记录中的精确 `E2E_PERSISTENCE_PROJECT_ID` 重部署同一 commit。只有最终 `Persistence, Recovery, and Download Production Acceptance Record` 输出并自动清理 Project 后才能标记本步骤完成。
 
 ### Step 9：执行自动化生产 Smoke 与故障场景 ⬜ 待完成

@@ -115,7 +115,7 @@ class CdpConnection {
   }
 }
 
-export async function launchBrowser({
+async function launchBrowserOnce({
   executablePath = resolveBrowserExecutable(),
   timeoutMs = 20_000
 } = {}) {
@@ -173,7 +173,14 @@ export async function launchBrowser({
     throw error;
   });
   const connection = new CdpConnection(webSocketUrl);
-  await connection.ready;
+  try {
+    await connection.ready;
+  } catch (error) {
+    connection.close();
+    child.kill("SIGTERM");
+    rmSync(profileDir, { recursive: true, force: true });
+    throw error;
+  }
   return {
     connection,
     async close() {
@@ -186,6 +193,26 @@ export async function launchBrowser({
       rmSync(profileDir, { recursive: true, force: true });
     }
   };
+}
+
+export async function launchBrowser({ startupAttempts = 2, retryDelayMs = 500, ...options } = {}) {
+  assert.ok(
+    Number.isInteger(startupAttempts) && startupAttempts > 0,
+    "Chromium startup attempts must be a positive integer."
+  );
+  let lastError;
+  for (let attempt = 1; attempt <= startupAttempts; attempt += 1) {
+    try {
+      return await launchBrowserOnce(options);
+    } catch (error) {
+      lastError = error;
+      if (attempt < startupAttempts) await sleep(retryDelayMs);
+    }
+  }
+  throw new Error(
+    `Chromium failed to start after ${startupAttempts} attempts: ${lastError instanceof Error ? lastError.message : String(lastError)}`,
+    { cause: lastError }
+  );
 }
 
 export async function createPage(connection) {

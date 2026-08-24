@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   canonicalPreviewUrl,
   formatPreviewAcceptanceReport,
+  launchBrowser,
   validatePreviewAcceptanceEvidence
 } from "./preview-acceptance.mjs";
 
@@ -77,4 +78,16 @@ test("formats a source-free, credential-free production record", () => {
   assert.match(report, /Preview Production Acceptance Record/);
   assert.match(report, /2 → 1 → 2 → 1/);
   assert.doesNotMatch(report, /password|cookie|src\/App|Preview acceptance alpha/i);
+});
+
+test("retries Chromium startup and reports the bounded terminal error", async () => {
+  await assert.rejects(
+    launchBrowser({
+      executablePath: process.execPath,
+      timeoutMs: 1_000,
+      startupAttempts: 2,
+      retryDelayMs: 0
+    }),
+    /Chromium failed to start after 2 attempts/
+  );
 });

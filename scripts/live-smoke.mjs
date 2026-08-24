@@ -75,6 +75,15 @@ let projectId;
 let cookie;
 let preserveProject = false;
 
+function boundedFailure(error) {
+  const raw = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+  const secrets = [password, firebaseApiKey, email, cookie].filter(Boolean);
+  return secrets
+    .reduce((message, secret) => message.split(secret).join("<redacted>"), raw)
+    .replaceAll(/\s+/g, " ")
+    .slice(0, 2_000);
+}
+
 function required(name) {
   const value = process.env[name];
   if (!value) throw new Error(`${name} is required for the live smoke test.`);
@@ -606,6 +615,18 @@ try {
           );
           const followUpSnapshotId = followUpCompleted?.payload?.snapshotId;
           assert.ok(followUpSnapshotId, "Follow-up Run did not record its Snapshot ID.");
+          let preparedState;
+          let preparedCheckpoint;
+          if (persistenceOnly && persistencePhase === "prepare") {
+            preparedState = await persistenceState();
+            preparedCheckpoint = resolvePersistenceCheckpoint(preparedState);
+            preserveProject = true;
+            console.info(formatPersistenceCheckpointReport(preparedState));
+            console.info(
+              "       Durable checkpoint secured before browser verification; handled browser failures will preserve this Project."
+            );
+          }
+          console.info("       Starting Chromium incremental behavior verification...");
           const browserEvidence = await runIncrementalPreviewBrowserAcceptance({
             baseUrl,
             projectId,
@@ -613,6 +634,7 @@ try {
             cookie,
             expectedMessages: [fixedPrompt, followUpPrompt]
           });
+          console.info("       Chromium incremental behavior verification passed.");
           const preview = await fetch(updated.previewUrl, { signal: AbortSignal.timeout(30_000) });
           const incrementalEvidence = validateIncrementalAcceptanceEvidence({
             projectId,
@@ -631,8 +653,8 @@ try {
           console.info(formatIncrementalAcceptanceReport(incrementalEvidence));
           if (persistenceOnly) {
             console.info("8/10 Verifying reload, logout/login, and complete server recovery...");
-            const beforeExpiry = await persistenceState();
-            const checkpoint = resolvePersistenceCheckpoint(beforeExpiry);
+            const beforeExpiry = preparedState ?? (await persistenceState());
+            const checkpoint = preparedCheckpoint ?? resolvePersistenceCheckpoint(beforeExpiry);
             assert.deepEqual(
               {
                 initialRunId: checkpoint.initialRunId,
@@ -661,10 +683,8 @@ try {
             cookie = relogin.cookie;
             const browser = { ...relogin, cookie: undefined };
             if (persistencePhase === "prepare") {
-              preserveProject = true;
-              console.info(formatPersistenceCheckpointReport(beforeExpiry));
               console.info(
-                "Persistence prepare deployment passed and preserved the exact checkpoint project."
+                "Persistence prepare deployment passed reload/logout/login verification and preserved the exact checkpoint project."
               );
               process.exitCode = 0;
             } else {
@@ -726,6 +746,9 @@ try {
       }
     }
   }
+} catch (error) {
+  console.error(`Acceptance runner failed before cleanup: ${boundedFailure(error)}`);
+  throw error;
 } finally {
   if (projectId && cookie && !preserveProject) {
     await fetch(`${baseUrl}/api/projects/${projectId}`, {

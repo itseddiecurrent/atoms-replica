@@ -25,9 +25,11 @@ A one-shot Railway process should not hold all evidence only in memory while idl
 production Sandbox TTL. The Railway gate therefore uses two deployments of the same commit:
 
 1. Set `E2E_PERSISTENCE_PHASE=prepare` and remove `E2E_PERSISTENCE_PROJECT_ID`, then deploy. The
-   Runner performs both real Agent Runs, incremental browser checks, reload, logout/login, and the
-   durable graph check. It prints a `Persistence Acceptance Checkpoint`, preserves that one temporary
-   Project, and exits successfully without waiting.
+   Runner performs both real Agent Runs and validates the durable graph. It prints a
+   `Persistence Acceptance Checkpoint` and begins preserving that one temporary Project before
+   launching Chromium, so a handled browser failure cannot discard two successful Runs. It then
+   performs incremental browser checks, reload, and logout/login, and exits successfully without
+   waiting. Only the explicit `Persistence prepare deployment passed` line marks prepare as complete.
 2. Copy the exact Project ID from that record. After its printed `Original Sandbox expiry`, set
    `E2E_PERSISTENCE_PHASE=resume` and `E2E_PERSISTENCE_PROJECT_ID` to that ID, then redeploy the same
    commit. The Runner authenticates, owner-scopes and validates the complete checkpoint before any
@@ -38,8 +40,11 @@ production Sandbox TTL. The Railway gate therefore uses two deployments of the s
 
 The exact ID is mandatory: resume never selects a Project by name or “latest” timestamp, so it cannot
 mutate or clean up an unrelated Project. If prepare fails before writing a valid checkpoint, its
-normal `finally` cleanup remains active. The local `pnpm test:persistence` command defaults to the
-single-process `full` phase; `E2E_PERSISTENCE_PHASE=full` can also be set explicitly.
+normal `finally` cleanup remains active. If a handled failure occurs after the checkpoint is printed,
+the exact checkpoint Project is retained for diagnosis or resume. Chromium startup is attempted
+twice, and any terminal error is logged in bounded, credential-redacted form before cleanup. The
+local `pnpm test:persistence` command defaults to the single-process `full` phase;
+`E2E_PERSISTENCE_PHASE=full` can also be set explicitly.
 
 ## Automated evidence
 

@@ -130,7 +130,7 @@ export function formatPersistenceCheckpointReport(state) {
     `- Run history: ${checkpoint.initialRunId} → ${checkpoint.followUpRunId}`,
     `- Snapshot history: ${checkpoint.initialSnapshotId} → ${checkpoint.followUpSnapshotId}`,
     `- Original Sandbox expiry: ${new Date(checkpoint.sandboxExpiresAt).toISOString()}`,
-    "- Reload, logout/login, Dashboard recovery, conversation, plan, files, versions, and Preview URL passed",
+    "- Durable graph: conversation, plans, files, versions, Preview URL, and latest Snapshot pointer validated",
     "- Next deployment: set E2E_PERSISTENCE_PHASE=resume and E2E_PERSISTENCE_PROJECT_ID to the Project ID above"
   ].join("\n");
 }
