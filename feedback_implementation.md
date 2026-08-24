@@ -154,7 +154,7 @@
 - Preview 修复后的线上 Run 已到达 95% 文件/Snapshot 保存，但暴露出文件枚举先递归整个 `node_modules` 和 `dist`、再执行归档过滤的远程调用放大问题。Sandbox 文件树现已在递归入口剪枝依赖、构建、缓存、Git、coverage 和 `.env` 路径，只枚举并持久化真实项目源码。
 - 最终 Railway 验收由 Runner commit `6afe731e4a6bf5023e002804fc34d94f169e4a07` 执行，目标 Web/Worker 修复版本为 `813423b24adfd8e40ab720a9982cd98ea51241d6`。固定中文 Todo Prompt 的真实 Run 成功保存 13 个项目文件，独立依赖安装、production build 和模型执行的测试均通过，HTTPS Preview 在线，明确完成摘要与 `First Production Generation Record` 已保存在 Runner Deploy Logs；临时验收 Project 随后自动清理，Step 5 正式通过。
 
-### Step 6：验收 Preview 首次启动与交互 ⬜ 待完成
+### Step 6：验收 Preview 首次启动与交互 ✅ 已完成
 
 1. 确认首次生成成功后自动出现 HTTPS Preview，不需要本地进程或人工填写 URL。
 2. 在 Preview 中添加两条 Todo、完成其中一条、恢复为未完成、删除另一条。
@@ -196,7 +196,7 @@
 - v10 用完整约 25 秒重试窗口仍稳定停在 `PREVIEW_PREPARE_FAILED`，排除了就绪延迟。对同一 Sandbox 的精确对照显示：短文件、同长度中性内容和 launcher 源码写入新路径均成功；只有覆盖既有 `/tmp/atom-replica-preview.mjs` 会返回 E2B `SandboxError`（permission/HTTP 500），先删除再写入则立即成功且内容一致。v11 将 Restart 顺序改为“停止旧进程 → 删除旧 launcher（允许不存在）→ 写入 launcher → 启动 → 健康检查”，并以调用顺序测试锁定该回归。
 - v11 commit `a3eb37c` 已通过 GitHub CI 与完整 Node 24 Release gate；同一修复还在此前失败的真实 E2B Sandbox 上直接完成 reconnect、TTL 续租、launcher 重建、进程启动和公网 HTTPS health。随后 Railway Runner 的 Project `ea4b6ebb-609b-46b7-9235-e4cda446fb3c`、Run `a2235462-651a-437f-a5f8-0173a77ce7d1` 与 Runtime Job `588f6264-89ab-4138-b088-1b19c4403117` 均取得成功终态；Job 在约 5.5 秒内以 `restart_preview` 和 HTTPS URL 完成，Runner 2.8 秒后自动删除临时 Project，证明自动化流程已越过 Restart、UI 反馈与最终健康探测。
 - 已取得 v11 Runner 的正式 `Preview Production Acceptance Record`（2026-08-24T09:41:01.270Z）：Initial Preview HTTPS/HTTP 200；空输入拒绝、添加两条、完成、恢复和删除均通过；未完成计数严格为 `2 → 1 → 2 → 1`；Workspace iframe 首次加载及刷新恢复通过；Restart 由 UI 入队并由 Worker 完成，重启后 HTTP 200；浏览器安全错误为 0，Preview mutation requests 为 0。所交付 Runner 日志不含密码、Session Cookie、密钥或生成源码。
-- 已核对并释放本轮三个不再被数据库 Project 引用的临时 E2B Sandbox。当前只剩 Web、Worker 与 E2B 对应时间窗的人工日志边界复核，需确认其不含密码、Session Cookie、完整 Prompt 或生成源码；完成该复核前 Step 6 仍保持待完成。
+- 已核对并释放本轮三个不再被数据库 Project 引用的临时 E2B Sandbox。人工日志边界复核已于同一验收时间窗完成：Web deployment `6e255570-cd39-40eb-9db7-46752e072310`、Worker deployment `458337ba-fe97-499f-ad1b-5ae798c78106`、acceptance-runner deployment `8a4531dd-ec3d-4683-a651-ada84dcf0c75`；Web、Worker 与 E2B 日志均确认不含密码、Session Cookie、完整 Prompt、密钥或生成源码。至此 Step 6 的自动化记录、部署关联、日志边界与资源清理证据全部齐全，正式通过。
 
 ### Step 7：验收同一项目的增量修改 ⬜ 待完成
 
