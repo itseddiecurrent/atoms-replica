@@ -194,6 +194,8 @@
 - v9 在 reconnect 后轮询 E2B 环境健康再暴露 Adapter，并对幂等的 Preview launcher 写入增加短时有界重试；新增测试覆盖环境健康连续两次未就绪后恢复，以及首次文件写入失败后重试成功。必须由 v9 Railway Runner 再次完成线上闭环后才能签收 Step 6。
 - v9 证明 `isRunning()` 已成功但三次 launcher 写入仍在约 7 秒内全部失败；同一 Sandbox 随后通过 SDK 直接完成 `/tmp` 与 Workspace 两个无害写入探针，进一步确认 E2B health 早于 Files 服务稳定就绪。v10 仅将幂等 launcher 写入扩大为约 25 秒内最多十次，不重试可能已产生副作用的进程启动；新增 fake-timer 测试证明持续失败时严格止于十次并保持 `PREVIEW_PREPARE_FAILED`。
 - v10 用完整约 25 秒重试窗口仍稳定停在 `PREVIEW_PREPARE_FAILED`，排除了就绪延迟。对同一 Sandbox 的精确对照显示：短文件、同长度中性内容和 launcher 源码写入新路径均成功；只有覆盖既有 `/tmp/atom-replica-preview.mjs` 会返回 E2B `SandboxError`（permission/HTTP 500），先删除再写入则立即成功且内容一致。v11 将 Restart 顺序改为“停止旧进程 → 删除旧 launcher（允许不存在）→ 写入 launcher → 启动 → 健康检查”，并以调用顺序测试锁定该回归。
+- v11 commit `a3eb37c` 已通过 GitHub CI 与完整 Node 24 Release gate；同一修复还在此前失败的真实 E2B Sandbox 上直接完成 reconnect、TTL 续租、launcher 重建、进程启动和公网 HTTPS health。随后 Railway Runner 的 Project `ea4b6ebb-609b-46b7-9235-e4cda446fb3c`、Run `a2235462-651a-437f-a5f8-0173a77ce7d1` 与 Runtime Job `588f6264-89ab-4138-b088-1b19c4403117` 均取得成功终态；Job 在约 5.5 秒内以 `restart_preview` 和 HTTPS URL 完成，Runner 2.8 秒后自动删除临时 Project，证明自动化流程已越过 Restart、UI 反馈与最终健康探测。
+- 已核对并释放本轮三个不再被数据库 Project 引用的临时 E2B Sandbox。当前只剩 Railway Deploy Logs 的人工边界复核：确认 v11 `Preview Production Acceptance Record`，并核对 Web/Worker/E2B 对应时间窗不含密码、Session Cookie、完整 Prompt 或生成源码；完成该复核前 Step 6 仍保持待完成。
 
 ### Step 7：验收同一项目的增量修改 ⬜ 待完成
 
