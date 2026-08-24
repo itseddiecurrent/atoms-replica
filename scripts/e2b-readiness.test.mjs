@@ -64,10 +64,10 @@ describe("E2B production readiness verifier", () => {
         "node --version && npm --version",
         "npm install --no-audit --no-fund",
         "npm run build",
-        "./node_modules/.bin/vite --host 0.0.0.0 --port 5173 --strictPort"
+        "node /tmp/atom-e2b-readiness-preview.mjs 5173"
       ]
     );
-    assert.equal(runtime.writes.length, 2);
+    assert.equal(runtime.writes.length, 3);
   });
 
   it("produces evidence without the API key or probe source", async () => {

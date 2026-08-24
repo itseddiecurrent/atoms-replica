@@ -5,11 +5,51 @@ import { Sandbox } from "e2b";
 export const SANDBOX_WORKDIR = "/home/user/app";
 export const SANDBOX_INSTALL_COMMAND = "npm install --no-audit --no-fund";
 export const SANDBOX_BUILD_COMMAND = "npm run build";
+const SANDBOX_PREVIEW_SERVER_PATH = "/tmp/atom-replica-preview.mjs";
+export const SANDBOX_PREVIEW_SERVER_SOURCE = `import { createReadStream } from "node:fs";
+import { stat } from "node:fs/promises";
+import { createServer } from "node:http";
+import { extname, resolve, sep } from "node:path";
+
+const port = Number(process.argv[2]);
+const root = resolve(process.cwd(), "dist");
+const types = { ".css": "text/css; charset=utf-8", ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".json": "application/json; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".woff": "font/woff", ".woff2": "font/woff2" };
+
+createServer(async (request, response) => {
+  if (request.method !== "GET" && request.method !== "HEAD") {
+    response.writeHead(405, { Allow: "GET, HEAD" }).end();
+    return;
+  }
+  try {
+    const pathname = decodeURIComponent(new URL(request.url ?? "/", "http://preview.local").pathname);
+    let file = resolve(root, "." + pathname);
+    if (file !== root && !file.startsWith(root + sep)) throw new Error("invalid path");
+    let info = await stat(file).catch(() => undefined);
+    if (info?.isDirectory()) {
+      file = resolve(file, "index.html");
+      info = await stat(file).catch(() => undefined);
+    }
+    if (!info?.isFile()) {
+      file = resolve(root, "index.html");
+      info = await stat(file);
+    }
+    response.writeHead(200, {
+      "Cache-Control": "no-cache",
+      "Content-Length": info.size,
+      "Content-Type": types[extname(file).toLowerCase()] ?? "application/octet-stream"
+    });
+    if (request.method === "HEAD") response.end();
+    else createReadStream(file).pipe(response);
+  } catch {
+    response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" }).end("Not found");
+  }
+}).listen(port, "0.0.0.0", () => console.log("Preview listening on 0.0.0.0:" + port));
+`;
 
 export function sandboxPreviewCommand(port: number): string {
   if (!Number.isInteger(port) || port < 1024 || port > 65_535)
     throw new Error("Sandbox Preview port must be an integer between 1024 and 65535");
-  return `./node_modules/.bin/vite --host 0.0.0.0 --port ${port} --strictPort`;
+  return `node ${SANDBOX_PREVIEW_SERVER_PATH} ${port}`;
 }
 
 export interface CommandResult {
@@ -348,6 +388,15 @@ export class E2BSandboxAdapter implements SandboxAdapter {
         Math.min(this.options.maxOutputChars, 2_000)
       );
     };
+    await this.observe("preview.prepare", () =>
+      this.requireSandbox()
+        .files.write(SANDBOX_PREVIEW_SERVER_PATH, SANDBOX_PREVIEW_SERVER_SOURCE)
+        .then(() => undefined)
+    );
+    await this.requireSandbox().commands.run(
+      `pkill -f '/tmp/[a]tom-replica-preview.mjs ${port}' || true`,
+      { cwd: SANDBOX_WORKDIR, timeoutMs: 10_000 }
+    );
     const process = await this.observe("preview.start", () =>
       this.requireSandbox().commands.run(sandboxPreviewCommand(port), {
         cwd: SANDBOX_WORKDIR,
@@ -379,10 +428,6 @@ export class E2BSandboxAdapter implements SandboxAdapter {
 
   async restartDevServer(options: { port?: number } = {}): Promise<void> {
     const port = options.port ?? this.options.previewPort;
-    await this.requireSandbox().commands.run(`pkill -f 'vite.*--port ${port}' || true`, {
-      cwd: SANDBOX_WORKDIR,
-      timeoutMs: 10_000
-    });
     await this.startDevServer({ port });
   }
 

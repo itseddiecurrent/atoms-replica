@@ -8,9 +8,16 @@ const probePackage = JSON.stringify({
   private: true,
   type: "module",
   scripts: { build: "vite build", dev: "vite" },
-  devDependencies: { vite: "7.1.0" }
+  devDependencies: { vite: "7.3.6" }
 });
 const probePage = "<!doctype html><html><body><h1>E2B ready</h1></body></html>";
+const previewServerPath = "/tmp/atom-e2b-readiness-preview.mjs";
+const previewServer = `import { createReadStream } from "node:fs";
+import { createServer } from "node:http";
+createServer((_request, response) => {
+  response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+  createReadStream("dist/index.html").pipe(response);
+}).listen(Number(process.argv[2]), "0.0.0.0");`;
 
 function required(env, name) {
   const value = env[name]?.trim();
@@ -144,6 +151,7 @@ export async function verifyE2BReadiness({
     );
     await sandbox.files.write(`${sandboxWorkdir}/package.json`, probePackage);
     await sandbox.files.write(`${sandboxWorkdir}/index.html`, probePage);
+    await sandbox.files.write(previewServerPath, previewServer);
     const versions = await runCommand(
       sandbox,
       "node --version && npm --version",
@@ -160,7 +168,7 @@ export async function verifyE2BReadiness({
     await runCommand(sandbox, "npm run build", commandOptions, "Production build");
     await runCommand(
       sandbox,
-      `./node_modules/.bin/vite --host 0.0.0.0 --port ${config.previewPort} --strictPort`,
+      `node ${previewServerPath} ${config.previewPort}`,
       { cwd: sandboxWorkdir, background: true },
       "Vite Preview start"
     );

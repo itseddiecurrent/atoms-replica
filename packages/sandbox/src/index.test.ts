@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { resolve } from "node:path";
+import { spawnSync } from "node:child_process";
 import {
   E2BSandboxAdapter,
+  SANDBOX_PREVIEW_SERVER_SOURCE,
   SANDBOX_WORKDIR,
   ensureSandbox,
   normalizeSandboxPath,
@@ -53,11 +55,14 @@ describe("sandbox path safety", () => {
 });
 
 describe("Sandbox Preview command", () => {
-  it("uses the installed Vite binary on a strict, externally reachable port", () => {
-    expect(sandboxPreviewCommand(5173)).toBe(
-      "./node_modules/.bin/vite --host 0.0.0.0 --port 5173 --strictPort"
-    );
+  it("uses the Node-compatible static server on a validated port", () => {
+    expect(sandboxPreviewCommand(5173)).toBe("node /tmp/atom-replica-preview.mjs 5173");
     expect(() => sandboxPreviewCommand(80)).toThrow(/between 1024 and 65535/);
+    const syntax = spawnSync(process.execPath, ["--input-type=module", "--check"], {
+      input: SANDBOX_PREVIEW_SERVER_SOURCE,
+      encoding: "utf8"
+    });
+    expect(syntax.status, syntax.stderr).toBe(0);
   });
 });
 
@@ -238,8 +243,13 @@ describe("E2BSandboxAdapter", () => {
       "https://sandbox.example.test",
       expect.objectContaining({ headers: { "Cache-Control": "no-cache" } })
     );
-    expect(sandbox.commandsRun[0]?.[0]).toBe(
-      "./node_modules/.bin/vite --host 0.0.0.0 --port 5173 --strictPort"
+    expect(sandbox.commandsRun.map(([command]) => command)).toEqual([
+      "pkill -f '/tmp/[a]tom-replica-preview.mjs 5173' || true",
+      "node /tmp/atom-replica-preview.mjs 5173"
+    ]);
+    expect(sandbox.files.write).toHaveBeenCalledWith(
+      "/tmp/atom-replica-preview.mjs",
+      expect.stringContaining('from "node:http"')
     );
   });
 
@@ -254,8 +264,8 @@ describe("E2BSandboxAdapter", () => {
     await adapter.restartDevServer();
 
     expect(sandbox.commandsRun.map(([command]) => command)).toEqual([
-      "pkill -f 'vite.*--port 4173' || true",
-      "./node_modules/.bin/vite --host 0.0.0.0 --port 4173 --strictPort"
+      "pkill -f '/tmp/[a]tom-replica-preview.mjs 4173' || true",
+      "node /tmp/atom-replica-preview.mjs 4173"
     ]);
     expect(sandbox.commandsRun[1]?.[1]).toEqual(
       expect.objectContaining({ cwd: SANDBOX_WORKDIR, background: true })
@@ -270,7 +280,8 @@ describe("E2BSandboxAdapter", () => {
         return {
           wait: async () => ({ exitCode: 1, stdout: "", stderr: "address already in use" })
         };
-      return { exitCode: 1, stdout: "", stderr: "ECONNREFUSED" };
+      if (command.startsWith("node -e")) return { exitCode: 1, stdout: "", stderr: "ECONNREFUSED" };
+      return { exitCode: 0, stdout: "", stderr: "" };
     });
     const adapter = new E2BSandboxAdapter({
       sdk: { create: vi.fn(), connect: vi.fn(async () => sandbox) },

@@ -83,3 +83,5 @@ For `SANDBOX_FAILED` during Preview startup, use the complete failure message to
 two boundaries. A failed Sandbox-local probe or an exited Vite process identifies an app/process
 startup problem; a successful local HTTP probe combined with a public 502 identifies the E2B Preview
 edge or hostname path. The diagnostic is bounded and must not contain generated source or secrets.
+The production Preview serves the independently built `dist` output with a zero-dependency Node HTTP
+process, so the E2B Template does not need to satisfy Vite's development-server Node minor version.
