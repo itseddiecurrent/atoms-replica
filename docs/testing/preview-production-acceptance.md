@@ -20,6 +20,10 @@ then starts headless Chromium and verifies all of the following:
 6. The Gate clicks the workspace's **Restart** button. It then proves the UI queued a durable runtime
    job, the Worker completed it as `restart_preview`, and the returned HTTPS Preview is healthy.
 
+The Restart control stays disabled until React hydration has attached its handler. The Gate waits
+for that explicit client-ready state before clicking, then reports queue, Worker terminal, and UI
+result failures separately instead of collapsing them into one timeout.
+
 The generated Project is deleted in `finally`, including when an assertion fails. The evidence
 record contains IDs, statuses, and behavioral results only; it never prints the session cookie,
 credentials, Prompt text, browser request headers, or generated source.

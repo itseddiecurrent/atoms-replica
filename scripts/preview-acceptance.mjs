@@ -316,7 +316,9 @@ const fetchProbeScript = String.raw`(() => {
           runtimeJobId: body.runtimeJobId,
           status: body.status,
           operation: body.resultJson?.operation,
-          previewUrl: body.resultJson?.previewUrl
+          previewUrl: body.resultJson?.previewUrl,
+          error: body.error,
+          errorMessage: body.errorMessage
         } : undefined
       });
     }
@@ -609,6 +611,14 @@ export async function runPreviewBrowserAcceptance({
       message: "Workspace did not render a Preview iframe before restart."
     });
     await page.evaluate(fetchProbeScript);
+    await waitUntil(
+      () =>
+        page.evaluate(`(() => {
+          const button = [...document.querySelectorAll("button")].find((element) => element.textContent.trim() === "Restart");
+          return Boolean(button && !button.disabled && button.dataset.runtimeReady === "true");
+        })()`),
+      { timeoutMs: 30_000, message: "Restart Preview button did not become interactive." }
+    );
     const clicked = await page.evaluate(`(() => {
       const button = [...document.querySelectorAll("button")].find((element) => element.textContent.trim() === "Restart");
       if (!button || button.disabled) return false;
@@ -616,24 +626,56 @@ export async function runPreviewBrowserAcceptance({
       return true;
     })()`);
     assert.equal(clicked, true, "Restart Preview button was unavailable.");
-    const restartFetches = await waitUntil(
+    const restartRequest = await waitUntil(
       () =>
         page.evaluate(`(() => {
-        const state = window.__atomAcceptance;
-        if (!document.body.innerText.includes("Preview restarted")) return undefined;
-        return state.fetches;
-      })()`),
-      { timeoutMs: 180_000, intervalMs: 500, message: "Workspace restart did not complete." }
+          return window.__atomAcceptance.fetches.find(
+            (entry) => entry.method === "POST" && entry.path.endsWith("/runtime/restart")
+          );
+        })()`),
+      { timeoutMs: 30_000, intervalMs: 250, message: "Workspace did not queue a restart." }
     );
-    const restartRequest = restartFetches.find(
-      (entry) => entry.method === "POST" && entry.path.endsWith("/runtime/restart")
+    assert.equal(
+      restartRequest.status,
+      202,
+      `Workspace restart request returned HTTP ${restartRequest.status}: ${restartRequest.body?.error ?? "unknown error"}`
     );
-    const completedJob = restartFetches.find(
-      (entry) =>
-        entry.method === "GET" &&
-        entry.body?.status === "completed" &&
-        entry.body?.operation === "restart_preview"
+    assert.match(
+      restartRequest.body?.runtimeJobId ?? "",
+      /^[0-9a-f-]{36}$/i,
+      "Workspace restart response did not include a Runtime Job ID."
     );
+    const runtimeJobId = restartRequest.body.runtimeJobId;
+    const terminalJob = await waitUntil(
+      async () => {
+        const state = await page.evaluate(`(() => {
+          const runtimeJobId = ${JSON.stringify(runtimeJobId)};
+          const jobs = window.__atomAcceptance.fetches.filter(
+            (entry) => entry.method === "GET" && entry.path.endsWith("/runtime-jobs/" + runtimeJobId)
+          );
+          const terminal = jobs.find((entry) => ["completed", "failed"].includes(entry.body?.status));
+          const uiFailed = document.body.innerText.includes("Preview restart failed");
+          return { terminal, uiFailed, lastStatus: jobs.at(-1)?.body?.status };
+        })()`);
+        if (state.terminal || state.uiFailed) return state;
+        throw new Error(
+          `Runtime Job ${runtimeJobId.slice(0, 8)} last status: ${state.lastStatus ?? "not observed"}.`
+        );
+      },
+      { timeoutMs: 190_000, intervalMs: 500, message: "Workspace restart did not complete." }
+    );
+    assert.ok(terminalJob.terminal, "Workspace reported that Preview restart failed.");
+    assert.notEqual(
+      terminalJob.terminal.body?.status,
+      "failed",
+      terminalJob.terminal.body?.errorMessage ?? "Worker Preview restart failed."
+    );
+    const completedJob = terminalJob.terminal;
+    assert.equal(completedJob.body?.operation, "restart_preview");
+    await waitUntil(() => page.evaluate(`document.body.innerText.includes("Preview restarted")`), {
+      timeoutMs: 10_000,
+      message: "Workspace did not render the restart success result."
+    });
     const restartedPreviewUrl = completedJob?.body?.previewUrl;
     assert.ok(restartedPreviewUrl, "Completed restart job did not include a Preview URL.");
     const restartedPreview = await fetch(restartedPreviewUrl, {

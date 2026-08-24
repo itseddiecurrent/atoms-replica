@@ -54,6 +54,15 @@ describe("Workspace", () => {
     expect(html).toContain("Build a water dashboard");
   });
 
+  it("does not expose Restart as interactive before client hydration", () => {
+    const html = renderToStaticMarkup(
+      <Workspace projectId="project-1" projectName="Water dashboard" />
+    );
+
+    expect(html).toContain('data-runtime-ready="false"');
+    expect(html).toMatch(/data-runtime-ready="false"[^>]*disabled=""/);
+  });
+
   it("renders a persisted preview with strict iframe permissions", () => {
     const html = renderToStaticMarkup(
       <Workspace

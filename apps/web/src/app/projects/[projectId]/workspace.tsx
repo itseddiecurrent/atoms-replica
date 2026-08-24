@@ -99,6 +99,7 @@ export function Workspace({
       : "running"
   );
   const [previewUrl, setPreviewUrl] = useState(initialPreviewUrl);
+  const [isHydrated, setIsHydrated] = useState(false);
   const [isRestarting, setIsRestarting] = useState(false);
   const [isCancelling, setIsCancelling] = useState(false);
   const [failure, setFailure] = useState<{ code: string; message: string } | null>(
@@ -120,6 +121,8 @@ export function Workspace({
   ]);
   const seenEventIds = useRef(new Set<number>());
   const localActivityId = useRef(0);
+
+  useEffect(() => setIsHydrated(true), []);
 
   function addLocalActivity(title: string, detail?: string, tone: ActivityItem["tone"] = "info") {
     localActivityId.current += 1;
@@ -462,7 +465,8 @@ export function Workspace({
           ) : null}
           <button
             className="hidden items-center gap-2 rounded-lg border border-zinc-200 px-3 py-2 text-xs font-medium text-zinc-600 hover:bg-zinc-50 sm:flex"
-            disabled={isRestarting}
+            data-runtime-ready={isHydrated ? "true" : "false"}
+            disabled={!isHydrated || isRestarting}
             onClick={restartPreview}
             type="button"
           >

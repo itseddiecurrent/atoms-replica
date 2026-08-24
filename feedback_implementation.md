@@ -179,6 +179,7 @@
 - Web 与 Worker 均将 `/railway.acceptance.json` 纳入部署 Watch Pattern，因此推进验收 Gate 时三个服务会从同一个新 commit 重新部署，避免 Runner 与目标生产服务版本不一致。
 - 已新增 `docs/testing/preview-production-acceptance.md` 和 5 条证据验证测试，记录可信本机与 Railway 执行方式、浏览器断言、脱敏边界以及 Web/Worker/E2B 日志人工复核要求。
 - 当前代码与可重复验收机制已实现；必须将本 commit 部署至 Web/Worker，并由 Railway Runner 产出 `Preview Production Acceptance Record`，再核对对应时间窗口日志无凭据、完整 Prompt 或源码泄漏后，才可将 Step 6 标记为完成。
+- 最新 Runner 已通过 iframe、刷新恢复与 Todo 交互，但在点击 Restart 后以 `Workspace restart did not complete` 超时；该表现与 SSR 按钮已出现、React hydration 尚未绑定点击处理器的竞态一致。Restart 现在会在 hydration 前保持禁用并暴露明确的 client-ready 状态，Runner 等待该状态后再点击，同时将 POST 入队、Runtime Job 成功/失败终态及 UI 成功反馈拆分验证；下一次部署若仍失败，将直接报告具体阶段、HTTP 或 Job 状态，而不再只有笼统的 180 秒超时。
 
 ### Step 7：验收同一项目的增量修改 ⬜ 待完成
 
