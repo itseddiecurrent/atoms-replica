@@ -6,6 +6,12 @@ export const SANDBOX_WORKDIR = "/home/user/app";
 export const SANDBOX_INSTALL_COMMAND = "npm install --no-audit --no-fund";
 export const SANDBOX_BUILD_COMMAND = "npm run build";
 
+export function sandboxPreviewCommand(port: number): string {
+  if (!Number.isInteger(port) || port < 1024 || port > 65_535)
+    throw new Error("Sandbox Preview port must be an integer between 1024 and 65535");
+  return `./node_modules/.bin/vite --host 0.0.0.0 --port ${port} --strictPort`;
+}
+
 export interface CommandResult {
   exitCode: number;
   stdout: string;
@@ -76,11 +82,18 @@ export interface E2BFileSystem {
 export interface E2BCommands {
   run(
     command: string,
-    options?: { cwd?: string; timeoutMs?: number; background?: boolean }
+    options?: {
+      cwd?: string;
+      timeoutMs?: number;
+      background?: boolean;
+      onStdout?: (data: string) => void;
+      onStderr?: (data: string) => void;
+    }
   ): Promise<{
     exitCode?: number;
     stdout?: string;
     stderr?: string;
+    wait?: () => Promise<{ exitCode?: number; stdout?: string; stderr?: string }>;
   }>;
 }
 
@@ -174,6 +187,9 @@ async function collectTemplateFiles(root: string): Promise<string[]> {
 
 export class E2BSandboxAdapter implements SandboxAdapter {
   private sandbox: E2BSandboxClient | undefined;
+  private previewProcessAttempt = 0;
+  private previewProcessState = "not started";
+  private previewProcessOutput = "";
   private readonly options: Required<
     Pick<E2BAdapterOptions, "timeoutMs" | "previewPort" | "commandTimeoutMs" | "maxOutputChars">
   > &
@@ -323,14 +339,42 @@ export class E2BSandboxAdapter implements SandboxAdapter {
 
   async startDevServer(options: { port?: number } = {}): Promise<void> {
     const port = options.port ?? this.options.previewPort;
-    await this.observe("preview.start", () =>
-      this.requireSandbox()
-        .commands.run(`npm run dev -- --host 0.0.0.0 --port ${port}`, {
-          cwd: SANDBOX_WORKDIR,
-          background: true
-        })
-        .then(() => undefined)
+    const attempt = ++this.previewProcessAttempt;
+    this.previewProcessState = "starting";
+    this.previewProcessOutput = "";
+    const captureOutput = (data: string) => {
+      this.previewProcessOutput = capOutput(
+        `${this.previewProcessOutput}${data}`,
+        Math.min(this.options.maxOutputChars, 2_000)
+      );
+    };
+    const process = await this.observe("preview.start", () =>
+      this.requireSandbox().commands.run(sandboxPreviewCommand(port), {
+        cwd: SANDBOX_WORKDIR,
+        background: true,
+        onStdout: captureOutput,
+        onStderr: captureOutput
+      })
     );
+    this.previewProcessState = "running";
+    if (typeof process.wait === "function") {
+      void process.wait().then(
+        (result) => {
+          if (attempt !== this.previewProcessAttempt) return;
+          captureOutput(result.stdout ?? "");
+          captureOutput(result.stderr ?? "");
+          this.previewProcessState = `exited with code ${result.exitCode ?? "unknown"}`;
+        },
+        (error) => {
+          if (attempt !== this.previewProcessAttempt) return;
+          const record =
+            error && typeof error === "object" ? (error as Record<string, unknown>) : {};
+          captureOutput(typeof record.stderr === "string" ? record.stderr : "");
+          captureOutput(typeof record.stdout === "string" ? record.stdout : "");
+          this.previewProcessState = `exited with code ${typeof record.exitCode === "number" ? record.exitCode : "unknown"}`;
+        }
+      );
+    }
   }
 
   async restartDevServer(options: { port?: number } = {}): Promise<void> {
@@ -350,15 +394,42 @@ export class E2BSandboxAdapter implements SandboxAdapter {
       let lastError: unknown;
       while (Date.now() < deadline) {
         try {
-          const response = await (this.options.fetchImpl ?? fetch)(url);
+          const response = await (this.options.fetchImpl ?? fetch)(url, {
+            headers: { "Cache-Control": "no-cache" },
+            signal: AbortSignal.timeout(Math.min(10_000, Math.max(1, deadline - Date.now())))
+          });
           if (response.ok) return url;
           lastError = new Error(`Preview returned HTTP ${response.status}`);
         } catch (error) {
           lastError = error;
         }
-        await new Promise((resolvePromise) => setTimeout(resolvePromise, 250));
+        await new Promise((resolvePromise) => setTimeout(resolvePromise, 500));
       }
-      throw new Error(`Preview did not become healthy before timeout: ${String(lastError)}`);
+      let localProbe = "unavailable";
+      try {
+        const result = await this.requireSandbox().commands.run(
+          `node -e "fetch('http://127.0.0.1:${port}').then(r=>{console.log('HTTP '+r.status);process.exit(r.ok?0:1)}).catch(e=>{console.error(e.cause?.code||e.message);process.exit(1)})"`,
+          { cwd: SANDBOX_WORKDIR, timeoutMs: 10_000 }
+        );
+        localProbe = capOutput(
+          (result.stdout || result.stderr || `exit ${result.exitCode ?? "unknown"}`).trim(),
+          300
+        );
+      } catch (error) {
+        const record = error && typeof error === "object" ? (error as Record<string, unknown>) : {};
+        localProbe = capOutput(
+          String(record.stderr ?? record.stdout ?? record.message ?? "probe failed").trim(),
+          300
+        );
+      }
+      const processOutput = this.previewProcessOutput.trim()
+        ? ` Output: ${this.previewProcessOutput.trim()}`
+        : "";
+      throw new Error(
+        `Preview did not become healthy before timeout: ${String(lastError)}. ` +
+          `Sandbox-local probe: ${localProbe || "no output"}. ` +
+          `Preview process: ${this.previewProcessState}.${processOutput}`
+      );
     });
   }
 

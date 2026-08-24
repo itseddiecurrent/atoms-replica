@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
+  formatGenerationRunnerProgress,
   formatFirstGenerationReport,
   productionBaseUrl,
   validateFirstGenerationEvidence
@@ -109,5 +110,29 @@ describe("first production generation evidence", () => {
       () => productionBaseUrl("https://localhost:3000"),
       /must target the public production/
     );
+  });
+
+  it("prints safe live progress without file contents or command output", () => {
+    assert.equal(
+      formatGenerationRunnerProgress({
+        type: "stage.progress",
+        payload: { stage: "coding", percent: 30, title: "Generating project code" }
+      }),
+      "[30%] Generating project code"
+    );
+    const toolLine = formatGenerationRunnerProgress({
+      type: "tool.started",
+      payload: {
+        tool: "write_file",
+        input: { path: "src/App.tsx", content: "private generated source" }
+      }
+    });
+    const commandLine = formatGenerationRunnerProgress({
+      type: "command.output",
+      payload: { command: "npm run build", exitCode: 0, output: "private build output" }
+    });
+    assert.match(toolLine, /write_file · src\/App\.tsx/);
+    assert.doesNotMatch(toolLine, /private generated source/);
+    assert.equal(commandLine, "       Command: npm run build · exit 0");
   });
 });

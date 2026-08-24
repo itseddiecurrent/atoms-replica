@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { loadEnvFile } from "node:process";
 
 import {
+  formatGenerationRunnerProgress,
   formatFirstGenerationReport,
   productionBaseUrl,
   validateFirstGenerationEvidence
@@ -59,61 +60,78 @@ function parseSseBlock(block) {
 
 async function consumeRun(runId, { reconnectAfterFirstEvent = false } = {}) {
   const deadline = Date.now() + maxWaitMs;
+  const startedAt = Date.now();
   let lastEventId = 0;
+  let lastEventType = "none";
   let previewUrl;
   let reconnectPending = reconnectAfterFirstEvent;
   const events = [];
-  while (Date.now() < deadline) {
-    const controller = new AbortController();
-    const remaining = Math.max(1, deadline - Date.now());
-    const timeout = setTimeout(() => controller.abort(), remaining);
-    const response = await fetch(`${baseUrl}/api/runs/${runId}/events`, {
-      headers: {
-        Cookie: cookie,
-        Accept: "text/event-stream",
-        ...(lastEventId ? { "Last-Event-ID": String(lastEventId) } : {})
-      },
-      signal: controller.signal
-    });
-    assert.equal(response.status, 200, `SSE returned ${response.status}`);
-    assert.match(response.headers.get("content-type") ?? "", /text\/event-stream/);
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    let forceReconnect = false;
-    try {
-      while (Date.now() < deadline) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        for (;;) {
-          const boundary = buffer.indexOf("\n\n");
-          if (boundary < 0) break;
-          const block = buffer.slice(0, boundary);
-          buffer = buffer.slice(boundary + 2);
-          const parsed = parseSseBlock(block);
-          if (!parsed) continue;
-          lastEventId = Math.max(lastEventId, parsed.id);
-          events.push(parsed.data);
-          if (parsed.event === "preview.ready") previewUrl = parsed.data.payload?.url;
-          if (["run.failed", "run.cancelled"].includes(parsed.event))
-            throw new Error(`Run ended as ${parsed.event}: ${JSON.stringify(parsed.data.payload)}`);
-          if (parsed.event === "run.completed") return { previewUrl, lastEventId, events };
-          if (reconnectPending) {
-            reconnectPending = false;
-            forceReconnect = true;
-            await reader.cancel();
-            break;
+  const heartbeat = setInterval(() => {
+    const elapsedSeconds = Math.floor((Date.now() - startedAt) / 1_000);
+    console.info(
+      `       Still waiting for Run ${runId.slice(0, 8)} after ${elapsedSeconds}s; last event: ${lastEventType}.`
+    );
+  }, 30_000);
+  try {
+    while (Date.now() < deadline) {
+      const controller = new AbortController();
+      const remaining = Math.max(1, deadline - Date.now());
+      const timeout = setTimeout(() => controller.abort(), remaining);
+      const response = await fetch(`${baseUrl}/api/runs/${runId}/events`, {
+        headers: {
+          Cookie: cookie,
+          Accept: "text/event-stream",
+          ...(lastEventId ? { "Last-Event-ID": String(lastEventId) } : {})
+        },
+        signal: controller.signal
+      });
+      assert.equal(response.status, 200, `SSE returned ${response.status}`);
+      assert.match(response.headers.get("content-type") ?? "", /text\/event-stream/);
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let forceReconnect = false;
+      try {
+        while (Date.now() < deadline) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          for (;;) {
+            const boundary = buffer.indexOf("\n\n");
+            if (boundary < 0) break;
+            const block = buffer.slice(0, boundary);
+            buffer = buffer.slice(boundary + 2);
+            const parsed = parseSseBlock(block);
+            if (!parsed) continue;
+            lastEventId = Math.max(lastEventId, parsed.id);
+            lastEventType = parsed.event;
+            events.push(parsed.data);
+            const progress = formatGenerationRunnerProgress(parsed.data);
+            if (progress) console.info(progress);
+            if (parsed.event === "preview.ready") previewUrl = parsed.data.payload?.url;
+            if (["run.failed", "run.cancelled"].includes(parsed.event))
+              throw new Error(
+                `Run ended as ${parsed.event}: ${JSON.stringify(parsed.data.payload)}`
+              );
+            if (parsed.event === "run.completed") return { previewUrl, lastEventId, events };
+            if (reconnectPending) {
+              reconnectPending = false;
+              forceReconnect = true;
+              await reader.cancel();
+              break;
+            }
           }
+          if (forceReconnect) break;
         }
-        if (forceReconnect) break;
+      } finally {
+        clearTimeout(timeout);
+        await reader.cancel().catch(() => undefined);
       }
-    } finally {
-      clearTimeout(timeout);
-      await reader.cancel().catch(() => undefined);
     }
+    throw new Error(`Run ${runId} did not complete within ${maxWaitMs}ms.`);
+  } finally {
+    clearInterval(heartbeat);
   }
-  throw new Error(`Run ${runId} did not complete within ${maxWaitMs}ms.`);
 }
 
 async function waitForRuntimeJob(runtimeJobId) {

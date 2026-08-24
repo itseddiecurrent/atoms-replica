@@ -78,3 +78,8 @@ confirm:
 If the Run fails, Activity must retain the last known percentage and display the stable error code,
 diagnostic, and recovery actions. Queued, Coding, or Validating without an eventual terminal event is
 not accepted.
+
+For `SANDBOX_FAILED` during Preview startup, use the complete failure message to distinguish the
+two boundaries. A failed Sandbox-local probe or an exited Vite process identifies an app/process
+startup problem; a successful local HTTP probe combined with a public 502 identifies the E2B Preview
+edge or hostname path. The diagnostic is bounded and must not contain generated source or secrets.

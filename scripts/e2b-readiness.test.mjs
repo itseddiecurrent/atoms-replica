@@ -64,7 +64,7 @@ describe("E2B production readiness verifier", () => {
         "node --version && npm --version",
         "npm install --no-audit --no-fund",
         "npm run build",
-        "npm run dev -- --host 0.0.0.0 --port 5173"
+        "./node_modules/.bin/vite --host 0.0.0.0 --port 5173 --strictPort"
       ]
     );
     assert.equal(runtime.writes.length, 2);

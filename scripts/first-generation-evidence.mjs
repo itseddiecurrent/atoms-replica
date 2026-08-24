@@ -23,6 +23,44 @@ export function productionBaseUrl(value) {
   return url.origin;
 }
 
+function safeDetail(value, maximum = 160) {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.replaceAll(/\s+/g, " ").trim();
+  return normalized.length > maximum ? `${normalized.slice(0, maximum)}…` : normalized;
+}
+
+export function formatGenerationRunnerProgress(event) {
+  const payload = event?.payload ?? {};
+  if (event?.type === "stage.progress")
+    return `[${payload.percent ?? "?"}%] ${payload.title ?? payload.stage ?? "Generation progress"}`;
+  if (event?.type === "run.queued") return "[5%] Run queued; waiting for Worker claim";
+  if (event?.type === "run.planning") return "[10%] Worker started planning";
+  if (event?.type === "plan.created") return "[20%] Implementation plan persisted";
+  if (event?.type === "run.coding") return "[30%] Code generation started";
+  if (event?.type === "tool.started") {
+    const target =
+      typeof payload.input?.path === "string"
+        ? payload.input.path
+        : typeof payload.input?.command === "string"
+          ? payload.input.command
+          : undefined;
+    return `       Tool: ${payload.tool ?? "unknown"}${target ? ` · ${safeDetail(target)}` : ""}`;
+  }
+  if (["file.created", "file.updated", "file.deleted"].includes(event?.type))
+    return `       File: ${event.type.replace("file.", "")} · ${safeDetail(payload.path) ?? "unknown"}`;
+  if (event?.type === "run.validating") return "[65%] Independent validation started";
+  if (event?.type === "command.output")
+    return `       Command: ${safeDetail(payload.command) ?? "unknown"} · exit ${payload.exitCode ?? "unknown"}`;
+  if (event?.type === "validation.failed")
+    return `       Validation failed: ${safeDetail(payload.message) ?? "no diagnostics"}`;
+  if (event?.type === "preview.ready") return "[92%] HTTPS Preview is healthy";
+  if (event?.type === "run.completed") return "[100%] Run completed and persisted";
+  if (event?.type === "run.failed")
+    return `       Run failed: ${payload.code ?? "INTERNAL_ERROR"} · ${safeDetail(payload.message) ?? "no diagnostics"}`;
+  if (event?.type === "run.cancelled") return "       Run cancelled";
+  return undefined;
+}
+
 export function validateFirstGenerationEvidence({ projectId, runId, events, files, previewUrl }) {
   requireValue(projectId, "Initial generation evidence requires a Project ID.");
   requireValue(runId, "Initial generation evidence requires a Run ID.");

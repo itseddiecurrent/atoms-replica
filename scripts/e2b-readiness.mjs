@@ -160,7 +160,7 @@ export async function verifyE2BReadiness({
     await runCommand(sandbox, "npm run build", commandOptions, "Production build");
     await runCommand(
       sandbox,
-      `npm run dev -- --host 0.0.0.0 --port ${config.previewPort}`,
+      `./node_modules/.bin/vite --host 0.0.0.0 --port ${config.previewPort} --strictPort`,
       { cwd: sandboxWorkdir, background: true },
       "Vite Preview start"
     );

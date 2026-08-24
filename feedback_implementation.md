@@ -122,7 +122,7 @@
 - 新增 6 条专项测试，覆盖完整远程生命周期、敏感信息隔离、限制/CSP 校验、Credits/并发确认、CSP 不匹配清理以及 Node/npm 失败诊断与清理。
 - 当前受控开发执行环境禁止外部 DNS，因此每次部署后的真实 E2B 探针必须按文档从可信本机或可出网 CI 运行；其输出即为该版本的 Runtime 与额度验收证据。
 
-### Step 5：验收线上首次真实生成 ✅ 已完成
+### Step 5：验收线上首次真实生成 🟡 验收中
 
 1. 使用专用测试账号在公开 URL 创建一个全新项目。
 2. 使用固定 Prompt：`创建一个带添加、完成和删除功能的 Todo App，并显示未完成数量。`
@@ -135,7 +135,7 @@
 
 验收标准：一个全新账号可以在生产环境完成至少一次真实代码生成；生成文件可查看，Run 有唯一成功终态，且服务端验证真实通过。
 
-#### 完成总结
+#### 实现与当前验收状态
 
 - 已修复 Activity 信息模糊的根因：前端现在订阅并解释 `tool.started`、`tool.completed`、文件变更、验证命令、Preview 和持久化事件，不再把真实操作降级显示为 `file.updated`、`command.output` 或无上下文状态名。
 - Worker 新增确定性的 0–100% 生产里程碑，分别覆盖理解需求、准备远程 Workspace、代码生成、独立验证、HTTPS Preview 和文件/Snapshot 保存；前端显示当前任务、具体说明、百分比和单调进度条，Header 同步显示阶段百分比。
@@ -148,6 +148,8 @@
 - 已新增 `docs/testing/first-production-generation.md`，记录部署前提、一条命令的生产 Gate、固定 Prompt 和针对本次反馈的八项 UI 手动检查。
 - 新增 Shared Event、Activity 格式化/进度、首次生成证据和 Worker 终态相关测试，覆盖明确消息、源码隔离、单调进度、失败保留、命令 exit code、真实文件边界和完整生产证据。
 - 已新增 `/railway.acceptance.json` 一次性线上 Runner 配置：第三个临时 `acceptance-runner` 从同一 GitHub commit 启动，直接请求 Railway Web 并由 Railway Worker 完成 OpenAI/E2B 生成；Restart Policy 为 `NEVER`，成功或失败均不会自动重跑消耗额度。其 Deploy Logs 中的脱敏输出即为本版本的真实首次生成证据。
+- 首次 Railway Runner 已证明登录、Project/Run 创建、SSE 重连、真实模型生成、依赖安装与 production build 均已执行，但 Preview 健康检查持续收到 E2B HTTP 502，Run 以 `SANDBOX_FAILED` 明确终止，因此本步骤尚未通过线上验收。
+- 针对该失败，Sandbox Preview 改为直接启动已安装的 Vite 二进制，固定 `0.0.0.0` 并启用 `--strictPort`，同时保留后台进程句柄、限制单次公网探测时间，并在失败时报告 Sandbox 内部 HTTP 探测、进程退出码和受长度限制的启动日志。部署后必须由 Railway Runner 重新获得 `run.completed`、HTTPS Preview 和完整证据记录，才能将本步骤标记为完成。
 
 ### Step 6：验收 Preview 首次启动与交互 ⬜ 待完成
 

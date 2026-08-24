@@ -5,6 +5,7 @@ import {
   SANDBOX_WORKDIR,
   ensureSandbox,
   normalizeSandboxPath,
+  sandboxPreviewCommand,
   type E2BSandboxClient,
   type E2BSandboxSdk
 } from "./index";
@@ -48,6 +49,15 @@ describe("sandbox path safety", () => {
     expect(() => normalizeSandboxPath("/etc/passwd")).toThrow();
     expect(() => normalizeSandboxPath("src/../../secret")).toThrow();
     expect(() => normalizeSandboxPath("src\\App.tsx")).toThrow();
+  });
+});
+
+describe("Sandbox Preview command", () => {
+  it("uses the installed Vite binary on a strict, externally reachable port", () => {
+    expect(sandboxPreviewCommand(5173)).toBe(
+      "./node_modules/.bin/vite --host 0.0.0.0 --port 5173 --strictPort"
+    );
+    expect(() => sandboxPreviewCommand(80)).toThrow(/between 1024 and 65535/);
   });
 });
 
@@ -189,7 +199,10 @@ describe("E2BSandboxAdapter", () => {
     });
     await adapter.connect("sb-test");
     await expect(adapter.getPreviewUrl(5173)).resolves.toBe("https://5173-sb-test.e2b.app");
-    expect(fetchImpl).toHaveBeenCalledWith("https://5173-sb-test.e2b.app");
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "https://5173-sb-test.e2b.app",
+      expect.objectContaining({ headers: { "Cache-Control": "no-cache" } })
+    );
   });
 
   it("recursively lists files while omitting directory entries", async () => {
@@ -221,8 +234,13 @@ describe("E2BSandboxAdapter", () => {
     await adapter.connect("sb-test");
     await adapter.startDevServer();
     await expect(adapter.getPreviewUrl()).resolves.toBe("https://sandbox.example.test");
-    expect(fetchImpl).toHaveBeenCalledWith("https://sandbox.example.test");
-    expect(sandbox.commandsRun[0]?.[0]).toContain("npm run dev -- --host 0.0.0.0 --port 5173");
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "https://sandbox.example.test",
+      expect.objectContaining({ headers: { "Cache-Control": "no-cache" } })
+    );
+    expect(sandbox.commandsRun[0]?.[0]).toBe(
+      "./node_modules/.bin/vite --host 0.0.0.0 --port 5173 --strictPort"
+    );
   });
 
   it("restarts Vite on the configured preview port", async () => {
@@ -237,8 +255,33 @@ describe("E2BSandboxAdapter", () => {
 
     expect(sandbox.commandsRun.map(([command]) => command)).toEqual([
       "pkill -f 'vite.*--port 4173' || true",
-      "npm run dev -- --host 0.0.0.0 --port 4173"
+      "./node_modules/.bin/vite --host 0.0.0.0 --port 4173 --strictPort"
     ]);
-    expect(sandbox.commandsRun[1]?.[1]).toEqual({ cwd: SANDBOX_WORKDIR, background: true });
+    expect(sandbox.commandsRun[1]?.[1]).toEqual(
+      expect.objectContaining({ cwd: SANDBOX_WORKDIR, background: true })
+    );
+  });
+
+  it("adds process and Sandbox-local diagnostics when the public Preview stays unhealthy", async () => {
+    const sandbox = fakeSandbox();
+    sandbox.commands.run = vi.fn(async (command: string, options?: Record<string, unknown>) => {
+      sandbox.commandsRun.push([command, options]);
+      if (options?.background)
+        return {
+          wait: async () => ({ exitCode: 1, stdout: "", stderr: "address already in use" })
+        };
+      return { exitCode: 1, stdout: "", stderr: "ECONNREFUSED" };
+    });
+    const adapter = new E2BSandboxAdapter({
+      sdk: { create: vi.fn(), connect: vi.fn(async () => sandbox) },
+      commandTimeoutMs: 1,
+      fetchImpl: vi.fn(async () => new Response("bad gateway", { status: 502 }))
+    });
+    await adapter.connect("sb-test");
+    await adapter.startDevServer();
+
+    await expect(adapter.getPreviewUrl()).rejects.toThrow(
+      /HTTP 502.*Sandbox-local probe: ECONNREFUSED.*exited with code 1.*address already in use/
+    );
   });
 });
