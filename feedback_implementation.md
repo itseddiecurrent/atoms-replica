@@ -198,7 +198,7 @@
 - 已取得 v11 Runner 的正式 `Preview Production Acceptance Record`（2026-08-24T09:41:01.270Z）：Initial Preview HTTPS/HTTP 200；空输入拒绝、添加两条、完成、恢复和删除均通过；未完成计数严格为 `2 → 1 → 2 → 1`；Workspace iframe 首次加载及刷新恢复通过；Restart 由 UI 入队并由 Worker 完成，重启后 HTTP 200；浏览器安全错误为 0，Preview mutation requests 为 0。所交付 Runner 日志不含密码、Session Cookie、密钥或生成源码。
 - 已核对并释放本轮三个不再被数据库 Project 引用的临时 E2B Sandbox。人工日志边界复核已于同一验收时间窗完成：Web deployment `6e255570-cd39-40eb-9db7-46752e072310`、Worker deployment `458337ba-fe97-499f-ad1b-5ae798c78106`、acceptance-runner deployment `8a4531dd-ec3d-4683-a651-ada84dcf0c75`；Web、Worker 与 E2B 日志均确认不含密码、Session Cookie、完整 Prompt、密钥或生成源码。至此 Step 6 的自动化记录、部署关联、日志边界与资源清理证据全部齐全，正式通过。
 
-### Step 7：验收同一项目的增量修改 ⬜ 待完成
+### Step 7：验收同一项目的增量修改 ✅ 已完成
 
 1. 在 Step 5 的同一项目发送第二条 Prompt：`把页面标题改成 Focus Todo，并增加 All、Active、Completed 三个筛选按钮。`
 2. 确认系统创建新的 Message 和 Run，而不是新建另一个 Project。
@@ -209,6 +209,18 @@
 7. 对比修改前后文件版本、Run ID 和 Preview 行为，保存脱敏证据。
 
 验收标准：同一 Project 内至少一次增量修改成功，既保留原功能，又实现新需求；消息、文件版本、Run 和 Snapshot 均形成连续历史。
+
+#### 完成总结
+
+- 已新增 `pnpm test:incremental` 生产 Gate：使用固定首次 Todo Prompt 创建临时 Project，随后通过同一 Project 的 Messages API 发送本步骤指定的中文 Prompt；Gate 会拒绝 Project 变化、Message/Run ID 缺失或两个 Run ID 相同。
+- Worker 的 `run.completed` 事件现记录成功持久化的 Snapshot ID，共享 SSE Schema 同步保留该字段；Gate 要求首次与增量 Run 的 Snapshot ID 均存在且不同，从 durable 事件直接证明 Snapshot 历史连续。
+- Project File 持久化现通过内容 Hash 跳过无变化的 upsert，不再因 Run 最终枚举而给未修改文件制造虚假版本；Gate 在内存中比较前后内容 Hash，报告路径和版本但不输出 Hash 或源码，并要求修改文件版本前进、未修改文件版本保持不变。
+- Chromium 增量验收会从同一 Workspace 恢复两条用户消息，并在更新后的真实 E2B Preview 中检查 `Focus Todo`、`All`、`Active`、`Completed`；随后真实执行空输入、添加两条、完成、Active/Completed/All 筛选、恢复、删除和未完成计数 `2 → 1 → 2 → 1`。
+- Gate 同时要求 Coder 在第二次 Run 读取既有文件、只改变与本次 UI 需求相关的 `src/` 或 `index.html` 路径、再次完成独立依赖安装和 production build，并保持浏览器安全错误与 Preview 远程 Mutation Request 均为 0。
+- 已新增 `docs/testing/incremental-production-acceptance.md`、6 条专项证据测试、Node 24/Chromium Railway Runner 入口和 Watch Pattern；完整 Release gate（测试、typecheck、lint、format、security scan、Web/Worker build）已在 commit `7e3f178` 通过，本次 GitHub Actions `32715188081` 亦成功。
+- 正式公开生产验收记录生成于 `2026-08-24T10:21:25.663Z`：Project `eeaa4237-10f9-4acc-8162-ffad6bced797` 在首次 Run `d4ba6736-2fdf-415f-9616-0c1111d07e26` 后，以 Message `9a17aab5-11fe-475f-9703-6bec0515d378` 创建增量 Run `89c54b76-4cbf-45f8-a1b9-598af7d3cf33`；Snapshot 从 `2346d211-288f-41b9-bc98-4237324a11c6` 推进至 `365c2f66-ee58-41e9-aa59-a00d283f406c`。
+- 增量 Run 仅改变 `index.html`、`src/App.test.tsx`、`src/App.tsx` 和 `src/styles.css`，9 个未修改文件保持原版本；独立安装与 build 均 exit 0，更新后的 HTTPS Preview HTTP 200，标题、三个筛选按钮与全部原 Todo 行为通过，Workspace 对话连续，浏览器安全错误和远程 Mutation Request 均为 0。
+- Gate 在成功后自动删除临时 Project 与数据库/Snapshot 记录；随后只读核对确认两个本轮临时 Sandbox 均无 Project 引用，并已按精确 Sandbox ID 释放，不保留额外 E2B 运行成本。至此 Step 7 的代码、版本、消息、Run、Snapshot、Preview 行为与资源清理证据全部齐全，正式通过。
 
 ### Step 8：验收持久化、恢复与下载 ⬜ 待完成
 
