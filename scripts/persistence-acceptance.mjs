@@ -63,6 +63,78 @@ function assertWorkspaceState(state, label) {
   );
 }
 
+export function resolvePersistenceCheckpoint(state) {
+  assert.match(state?.project?.id ?? "", UUID_PATTERN, "Checkpoint Project ID must be recorded.");
+  assert.equal(state.project.status, "running", "Checkpoint Project must be Running.");
+  assert.match(state.project.previewUrl ?? "", /^https:\/\//, "Checkpoint Preview URL is missing.");
+  assert.match(state.project.sandboxId ?? "", /^[a-z0-9]+$/i, "Checkpoint Sandbox ID is missing.");
+  assert.ok(
+    Number.isFinite(new Date(state.project.sandboxExpiresAt).getTime()),
+    "Checkpoint Sandbox expiry is invalid."
+  );
+  assert.equal(state.runs.length, 2, "Checkpoint must contain exactly two Agent Runs.");
+  assert.ok(
+    state.runs.every((run) => run.status === "completed" && run.hasPlan),
+    "Checkpoint Runs must be completed with durable plans."
+  );
+  assert.equal(
+    state.messages.length,
+    4,
+    "Checkpoint must contain both user and assistant messages."
+  );
+  assert.equal(state.snapshots.length, 2, "Checkpoint must contain both Run Snapshots.");
+  assert.ok(state.files.length > 0, "Checkpoint must contain Project Files.");
+  assert.ok(state.files.every((file) => file.version > 0));
+
+  const [initialRun, followUpRun] = state.runs;
+  const runIds = new Set(state.runs.map((run) => run.id));
+  const messageIds = new Set(state.messages.map((message) => message.id));
+  assert.equal(runIds.size, 2, "Checkpoint Run IDs must be unique.");
+  assert.ok(
+    state.runs.every((run) => messageIds.has(run.triggerMessageId)),
+    "Checkpoint Runs must reference their durable trigger Messages."
+  );
+  assert.ok(
+    state.messages.every((message) => message.runId && runIds.has(message.runId)),
+    "Checkpoint Messages must reference one of the two Runs."
+  );
+  const initialSnapshot = state.snapshots.find((snapshot) => snapshot.runId === initialRun.id);
+  const followUpSnapshot = state.snapshots.find((snapshot) => snapshot.runId === followUpRun.id);
+  assert.ok(initialSnapshot, "Checkpoint is missing the initial Run Snapshot.");
+  assert.ok(followUpSnapshot, "Checkpoint is missing the follow-up Run Snapshot.");
+  assert.equal(
+    state.project.latestSnapshotId,
+    followUpSnapshot.id,
+    "Checkpoint latest Snapshot pointer is invalid."
+  );
+  assert.ok(followUpRun.planSummary, "Checkpoint follow-up plan summary is missing.");
+
+  return {
+    projectId: state.project.id,
+    previewUrl: state.project.previewUrl,
+    sandboxExpiresAt: state.project.sandboxExpiresAt,
+    initialRunId: initialRun.id,
+    followUpRunId: followUpRun.id,
+    initialSnapshotId: initialSnapshot.id,
+    followUpSnapshotId: followUpSnapshot.id,
+    followUpPlanSummary: followUpRun.planSummary
+  };
+}
+
+export function formatPersistenceCheckpointReport(state) {
+  const checkpoint = resolvePersistenceCheckpoint(state);
+  return [
+    "## Persistence Acceptance Checkpoint",
+    "",
+    `- Project ID: ${checkpoint.projectId}`,
+    `- Run history: ${checkpoint.initialRunId} → ${checkpoint.followUpRunId}`,
+    `- Snapshot history: ${checkpoint.initialSnapshotId} → ${checkpoint.followUpSnapshotId}`,
+    `- Original Sandbox expiry: ${new Date(checkpoint.sandboxExpiresAt).toISOString()}`,
+    "- Reload, logout/login, Dashboard recovery, conversation, plan, files, versions, and Preview URL passed",
+    "- Next deployment: set E2E_PERSISTENCE_PHASE=resume and E2E_PERSISTENCE_PROJECT_ID to the Project ID above"
+  ].join("\n");
+}
+
 function assertDataGraph(state, expected) {
   assert.equal(state.project.id, expected.projectId);
   assert.equal(state.project.status, "running");

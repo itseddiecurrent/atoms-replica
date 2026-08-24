@@ -23,9 +23,11 @@ import {
   validateIncrementalAcceptanceEvidence
 } from "./incremental-acceptance.mjs";
 import {
+  formatPersistenceCheckpointReport,
   formatPersistenceAcceptanceReport,
   isUnsafeDownloadPath,
   readStoredZip,
+  resolvePersistenceCheckpoint,
   validatePersistenceAcceptanceEvidence
 } from "./persistence-acceptance.mjs";
 import {
@@ -45,24 +47,33 @@ for (const path of [".env", ".env.test-account"]) {
 
 const fixedPrompt = "创建一个带添加、完成和删除功能的 Todo App，并显示未完成数量。";
 const followUpPrompt = "把页面标题改成 Focus Todo，并增加 All、Active、Completed 三个筛选按钮。";
-const acceptanceRunnerRelease =
-  process.env.E2E_PERSISTENCE_ONLY === "true"
-    ? "step8-persistence-recovery-download-v1"
-    : "step7-incremental-modification-v1";
+const persistenceOnly = process.env.E2E_PERSISTENCE_ONLY === "true";
+const persistencePhase = persistenceOnly
+  ? (process.env.E2E_PERSISTENCE_PHASE ?? (process.env.RAILWAY_GIT_COMMIT_SHA ? "prepare" : "full"))
+  : undefined;
+assert.ok(
+  !persistenceOnly || ["prepare", "resume", "full"].includes(persistencePhase),
+  "E2E_PERSISTENCE_PHASE must be prepare, resume, or full."
+);
+const acceptanceRunnerRelease = persistenceOnly
+  ? `step8-persistence-recovery-download-v2-${persistencePhase}`
+  : "step7-incremental-modification-v1";
 const baseUrl = productionBaseUrl(required("E2E_BASE_URL"));
 const email = required("E2E_EMAIL");
 const password = required("E2E_PASSWORD");
 const firebaseApiKey = process.env.E2E_FIREBASE_API_KEY ?? required("NEXT_PUBLIC_FIREBASE_API_KEY");
 const maxWaitMs = Number(process.env.E2E_MAX_WAIT_MS ?? 12 * 60_000);
 const deploySettleMs = Number(
-  process.env.E2E_DEPLOY_SETTLE_MS ?? (process.env.RAILWAY_GIT_COMMIT_SHA ? 120_000 : 0)
+  persistencePhase === "resume"
+    ? 0
+    : (process.env.E2E_DEPLOY_SETTLE_MS ?? (process.env.RAILWAY_GIT_COMMIT_SHA ? 120_000 : 0))
 );
 const initialOnly = process.env.E2E_INITIAL_ONLY === "true";
 const previewOnly = process.env.E2E_PREVIEW_ONLY === "true";
-const persistenceOnly = process.env.E2E_PERSISTENCE_ONLY === "true";
 const incrementalOnly = process.env.E2E_INCREMENTAL_ONLY === "true" || persistenceOnly;
 let projectId;
 let cookie;
+let preserveProject = false;
 
 function required(name) {
   const value = process.env[name];
@@ -347,6 +358,88 @@ async function validateDownloadedProject(files, marker) {
   }
 }
 
+async function completePersistenceAcceptance({
+  checkpoint,
+  browser,
+  beforeExpiry,
+  expectedInteractions
+}) {
+  console.info("9/10 Waiting for expiry, restoring, editing, downloading, and running clean...");
+  await waitForSandboxExpiry(checkpoint.sandboxExpiresAt);
+  console.info("       Sandbox expiry reached; requesting UI restoration from durable state...");
+  const restore = await runExpiredSandboxRestoreBrowserAcceptance({
+    baseUrl,
+    projectId,
+    cookie,
+    timeoutMs: Math.min(maxWaitMs, 6 * 60_000)
+  });
+  console.info(
+    "       Restoration completed; validating the new Preview and incremental result..."
+  );
+  const restoredPreview = await fetch(restore.previewUrl, {
+    signal: AbortSignal.timeout(30_000)
+  });
+  const restoredBrowser = await runStandaloneTodoBrowserAcceptance({ url: restore.previewUrl });
+  const afterRestore = await persistenceState();
+  const marker = "Persistence restored";
+  console.info("       Applying the visible IDE edit through a durable Runtime Job...");
+  const ide = await runIdeEditBrowserAcceptance({
+    baseUrl,
+    projectId,
+    previewUrl: restore.previewUrl,
+    cookie,
+    marker,
+    timeoutMs: Math.min(maxWaitMs, 6 * 60_000)
+  });
+  const afterIdeSave = await persistenceState();
+
+  console.info("       Downloading and validating the final project in a clean directory...");
+  const serverFiles = await collectProjectFiles();
+  const downloadResponse = await fetch(`${baseUrl}/api/projects/${projectId}/download`, {
+    headers: { Cookie: cookie },
+    signal: AbortSignal.timeout(30_000)
+  });
+  assert.equal(downloadResponse.status, 200);
+  const downloadedFiles = readStoredZip(new Uint8Array(await downloadResponse.arrayBuffer()));
+  const unsafePaths = downloadedFiles.map(({ path }) => path).filter(isUnsafeDownloadPath);
+  const serverContents = new Map(serverFiles.map((file) => [file.path, file.content]));
+  const filesMatchServer =
+    downloadedFiles.length === serverFiles.length &&
+    downloadedFiles.every((file) => serverContents.get(file.path) === file.content);
+  const clean = await validateDownloadedProject(downloadedFiles, marker);
+  const persistenceEvidence = validatePersistenceAcceptanceEvidence({
+    projectId,
+    initialRunId: checkpoint.initialRunId,
+    followUpRunId: checkpoint.followUpRunId,
+    initialSnapshotId: checkpoint.initialSnapshotId,
+    followUpSnapshotId: checkpoint.followUpSnapshotId,
+    browser,
+    beforeExpiry,
+    afterRestore,
+    afterIdeSave,
+    restore: {
+      ...restore,
+      previewHttpStatus: restoredPreview.status,
+      incrementalResultVisible:
+        restoredBrowser.interactions.titleVisible && restoredBrowser.interactions.filtersVisible
+    },
+    ide,
+    download: {
+      filesMatchServer,
+      fileCount: downloadedFiles.length,
+      unsafePaths,
+      ...clean
+    },
+    expectedInteractions: expectedInteractions ?? restoredBrowser.interactions
+  });
+  console.info(formatPersistenceAcceptanceReport(persistenceEvidence));
+  console.info("10/10 Cleaning up the persistence acceptance project...");
+  await jsonRequest(`/api/projects/${projectId}`, { method: "DELETE" });
+  projectId = undefined;
+  console.info("Persistence, recovery, and download production acceptance passed.");
+  process.exitCode = 0;
+}
+
 try {
   console.info(`Acceptance runner release: ${acceptanceRunnerRelease}`);
   console.info(
@@ -391,69 +484,72 @@ try {
   cookie = session.headers.get("set-cookie")?.match(/^([^;]+)/)?.[1];
   assert.ok(cookie, "Session response did not set a cookie.");
 
-  console.info("3/10 Creating the fixed Todo App and testing SSE reconnection...");
-  const created = await jsonRequest("/api/projects", {
-    method: "POST",
-    body: JSON.stringify({ prompt: fixedPrompt })
-  });
-  projectId = created.body.projectId;
-  const initial = await consumeRun(created.body.runId, { reconnectAfterFirstEvent: true });
-  assert.ok(initial.previewUrl, "Initial run did not publish a Preview URL.");
-
-  console.info("4/10 Checking the live Preview and generation evidence...");
-  const preview = await fetch(initial.previewUrl, { signal: AbortSignal.timeout(30_000) });
-  assert.equal(preview.status, 200);
-  assert.match(await preview.text(), /<html|<div[^>]+id=["']root/i);
-
-  const initialFiles = (await jsonRequest(`/api/projects/${projectId}/files`)).body.files;
-  const initialApp = initialFiles.find((file) => file.path === "src/App.tsx");
-  assert.ok(initialApp, "Generated project is missing src/App.tsx.");
-  const initialAppContent = (
-    await jsonRequest(
-      `/api/projects/${projectId}/files/content?path=${encodeURIComponent(initialApp.path)}`
-    )
-  ).body;
-  const generationEvidence = validateFirstGenerationEvidence({
-    projectId,
-    runId: created.body.runId,
-    events: initial.events,
-    files: initialFiles.map((file) => ({
-      path: file.path,
-      content: file.path === initialApp.path ? initialAppContent.content : "persisted"
-    })),
-    previewUrl: initial.previewUrl
-  });
-  console.info(formatFirstGenerationReport(generationEvidence));
-
-  if (initialOnly) {
-    console.info("Cleaning up the initial-generation acceptance project...");
-    await jsonRequest(`/api/projects/${projectId}`, { method: "DELETE" });
-    projectId = undefined;
-    console.info("First production generation acceptance passed.");
+  if (persistencePhase === "resume") {
+    console.info("3/10 Loading the exact persistence checkpoint from the prepare deployment...");
+    projectId = required("E2E_PERSISTENCE_PROJECT_ID");
+    const beforeExpiry = await persistenceState();
+    const checkpoint = resolvePersistenceCheckpoint(beforeExpiry);
+    assert.equal(
+      checkpoint.projectId,
+      projectId,
+      "Resume checkpoint did not match E2E_PERSISTENCE_PROJECT_ID."
+    );
+    console.info("8/10 Re-verifying reload, logout/login, and complete server recovery...");
+    const relogin = await runPersistenceReloginBrowserAcceptance({
+      baseUrl,
+      projectId,
+      previewUrl: checkpoint.previewUrl,
+      cookie,
+      email,
+      password,
+      expectedMessages: [fixedPrompt, followUpPrompt],
+      expectedPlanSummary: checkpoint.followUpPlanSummary
+    });
+    cookie = relogin.cookie;
+    const browser = { ...relogin, cookie: undefined };
+    await completePersistenceAcceptance({ checkpoint, browser, beforeExpiry });
   } else {
-    if (previewOnly) {
-      console.info("5/10 Exercising Preview interactions, reload recovery, CSP, and UI restart...");
-      const previewEvidence = await runPreviewBrowserAcceptance({
-        baseUrl,
-        projectId,
-        runId: created.body.runId,
-        previewUrl: initial.previewUrl,
-        cookie,
-        restartTimeoutMs: Math.min(maxWaitMs, 6 * 60_000)
-      });
-      console.info(formatPreviewAcceptanceReport(previewEvidence));
-      console.info("Cleaning up the Preview acceptance project...");
+    console.info("3/10 Creating the fixed Todo App and testing SSE reconnection...");
+    const created = await jsonRequest("/api/projects", {
+      method: "POST",
+      body: JSON.stringify({ prompt: fixedPrompt })
+    });
+    projectId = created.body.projectId;
+    const initial = await consumeRun(created.body.runId, { reconnectAfterFirstEvent: true });
+    assert.ok(initial.previewUrl, "Initial run did not publish a Preview URL.");
+
+    console.info("4/10 Checking the live Preview and generation evidence...");
+    const preview = await fetch(initial.previewUrl, { signal: AbortSignal.timeout(30_000) });
+    assert.equal(preview.status, 200);
+    assert.match(await preview.text(), /<html|<div[^>]+id=["']root/i);
+
+    const initialFiles = (await jsonRequest(`/api/projects/${projectId}/files`)).body.files;
+    const initialApp = initialFiles.find((file) => file.path === "src/App.tsx");
+    assert.ok(initialApp, "Generated project is missing src/App.tsx.");
+    const initialAppContent = (
+      await jsonRequest(
+        `/api/projects/${projectId}/files/content?path=${encodeURIComponent(initialApp.path)}`
+      )
+    ).body;
+    const generationEvidence = validateFirstGenerationEvidence({
+      projectId,
+      runId: created.body.runId,
+      events: initial.events,
+      files: initialFiles.map((file) => ({
+        path: file.path,
+        content: file.path === initialApp.path ? initialAppContent.content : "persisted"
+      })),
+      previewUrl: initial.previewUrl
+    });
+    console.info(formatFirstGenerationReport(generationEvidence));
+
+    if (initialOnly) {
+      console.info("Cleaning up the initial-generation acceptance project...");
       await jsonRequest(`/api/projects/${projectId}`, { method: "DELETE" });
       projectId = undefined;
-      console.info("Preview production acceptance passed.");
-      process.exitCode = 0;
+      console.info("First production generation acceptance passed.");
     } else {
-      const beforeFiles = await collectFileEvidence();
-      const initialCompleted = initial.events.findLast((event) => event.type === "run.completed");
-      const initialSnapshotId = initialCompleted?.payload?.snapshotId;
-      assert.ok(initialSnapshotId, "Initial Run did not record its Snapshot ID.");
-
-      if (!incrementalOnly) {
+      if (previewOnly) {
         console.info(
           "5/10 Exercising Preview interactions, reload recovery, CSP, and UI restart..."
         );
@@ -466,194 +562,172 @@ try {
           restartTimeoutMs: Math.min(maxWaitMs, 6 * 60_000)
         });
         console.info(formatPreviewAcceptanceReport(previewEvidence));
-      }
+        console.info("Cleaning up the Preview acceptance project...");
+        await jsonRequest(`/api/projects/${projectId}`, { method: "DELETE" });
+        projectId = undefined;
+        console.info("Preview production acceptance passed.");
+        process.exitCode = 0;
+      } else {
+        const beforeFiles = await collectFileEvidence();
+        const initialCompleted = initial.events.findLast((event) => event.type === "run.completed");
+        const initialSnapshotId = initialCompleted?.payload?.snapshotId;
+        assert.ok(initialSnapshotId, "Initial Run did not record its Snapshot ID.");
 
-      console.info("6/10 Applying the fixed same-project follow-up change...");
-      const followUp = await jsonRequest(`/api/projects/${projectId}/messages`, {
-        method: "POST",
-        body: JSON.stringify({ content: followUpPrompt })
-      });
-      const updated = await consumeRun(followUp.body.runId);
-      assert.ok(updated.previewUrl, "Follow-up Run did not publish an updated Preview URL.");
+        if (!incrementalOnly) {
+          console.info(
+            "5/10 Exercising Preview interactions, reload recovery, CSP, and UI restart..."
+          );
+          const previewEvidence = await runPreviewBrowserAcceptance({
+            baseUrl,
+            projectId,
+            runId: created.body.runId,
+            previewUrl: initial.previewUrl,
+            cookie,
+            restartTimeoutMs: Math.min(maxWaitMs, 6 * 60_000)
+          });
+          console.info(formatPreviewAcceptanceReport(previewEvidence));
+        }
 
-      if (incrementalOnly) {
-        console.info(
-          "7/10 Verifying versions, Snapshot continuity, conversation, and UI behavior..."
-        );
-        const afterFiles = await collectFileEvidence();
-        const followUpCompleted = updated.events.findLast(
-          (event) => event.type === "run.completed"
-        );
-        const followUpSnapshotId = followUpCompleted?.payload?.snapshotId;
-        assert.ok(followUpSnapshotId, "Follow-up Run did not record its Snapshot ID.");
-        const browserEvidence = await runIncrementalPreviewBrowserAcceptance({
-          baseUrl,
-          projectId,
-          previewUrl: updated.previewUrl,
-          cookie,
-          expectedMessages: [fixedPrompt, followUpPrompt]
+        console.info("6/10 Applying the fixed same-project follow-up change...");
+        const followUp = await jsonRequest(`/api/projects/${projectId}/messages`, {
+          method: "POST",
+          body: JSON.stringify({ content: followUpPrompt })
         });
-        const preview = await fetch(updated.previewUrl, { signal: AbortSignal.timeout(30_000) });
-        const incrementalEvidence = validateIncrementalAcceptanceEvidence({
-          projectId,
-          initialRunId: created.body.runId,
-          followUpMessageId: followUp.body.messageId,
-          followUpRunId: followUp.body.runId,
-          initialSnapshotId,
-          followUpSnapshotId,
-          events: updated.events,
-          beforeFiles,
-          afterFiles,
-          previewUrl: updated.previewUrl,
-          previewHttpStatus: preview.status,
-          ...browserEvidence
-        });
-        console.info(formatIncrementalAcceptanceReport(incrementalEvidence));
-        if (persistenceOnly) {
-          console.info("8/10 Verifying reload, logout/login, and complete server recovery...");
-          const beforeExpiry = await persistenceState();
-          const latestPlan = beforeExpiry.runs.find(({ id }) => id === followUp.body.runId);
-          assert.ok(latestPlan?.planSummary, "Follow-up Run did not preserve its plan summary.");
-          const relogin = await runPersistenceReloginBrowserAcceptance({
+        const updated = await consumeRun(followUp.body.runId);
+        assert.ok(updated.previewUrl, "Follow-up Run did not publish an updated Preview URL.");
+
+        if (incrementalOnly) {
+          console.info(
+            "7/10 Verifying versions, Snapshot continuity, conversation, and UI behavior..."
+          );
+          const afterFiles = await collectFileEvidence();
+          const followUpCompleted = updated.events.findLast(
+            (event) => event.type === "run.completed"
+          );
+          const followUpSnapshotId = followUpCompleted?.payload?.snapshotId;
+          assert.ok(followUpSnapshotId, "Follow-up Run did not record its Snapshot ID.");
+          const browserEvidence = await runIncrementalPreviewBrowserAcceptance({
             baseUrl,
             projectId,
             previewUrl: updated.previewUrl,
             cookie,
-            email,
-            password,
-            expectedMessages: [fixedPrompt, followUpPrompt],
-            expectedPlanSummary: latestPlan.planSummary
+            expectedMessages: [fixedPrompt, followUpPrompt]
           });
-          cookie = relogin.cookie;
-          const browser = { ...relogin, cookie: undefined };
-
-          console.info(
-            "9/10 Waiting for expiry, restoring, editing, downloading, and running clean..."
-          );
-          await waitForSandboxExpiry(beforeExpiry.project.sandboxExpiresAt);
-          const restore = await runExpiredSandboxRestoreBrowserAcceptance({
-            baseUrl,
-            projectId,
-            cookie,
-            timeoutMs: Math.min(maxWaitMs, 6 * 60_000)
-          });
-          const restoredPreview = await fetch(restore.previewUrl, {
-            signal: AbortSignal.timeout(30_000)
-          });
-          const restoredBrowser = await runStandaloneTodoBrowserAcceptance({
-            url: restore.previewUrl
-          });
-          const afterRestore = await persistenceState();
-          const marker = "Persistence restored";
-          const ide = await runIdeEditBrowserAcceptance({
-            baseUrl,
-            projectId,
-            previewUrl: restore.previewUrl,
-            cookie,
-            marker,
-            timeoutMs: Math.min(maxWaitMs, 6 * 60_000)
-          });
-          const afterIdeSave = await persistenceState();
-
-          const serverFiles = await collectProjectFiles();
-          const downloadResponse = await fetch(`${baseUrl}/api/projects/${projectId}/download`, {
-            headers: { Cookie: cookie },
-            signal: AbortSignal.timeout(30_000)
-          });
-          assert.equal(downloadResponse.status, 200);
-          const downloadedFiles = readStoredZip(
-            new Uint8Array(await downloadResponse.arrayBuffer())
-          );
-          const unsafePaths = downloadedFiles.map(({ path }) => path).filter(isUnsafeDownloadPath);
-          const serverContents = new Map(serverFiles.map((file) => [file.path, file.content]));
-          const filesMatchServer =
-            downloadedFiles.length === serverFiles.length &&
-            downloadedFiles.every((file) => serverContents.get(file.path) === file.content);
-          const clean = await validateDownloadedProject(downloadedFiles, marker);
-          const persistenceEvidence = validatePersistenceAcceptanceEvidence({
+          const preview = await fetch(updated.previewUrl, { signal: AbortSignal.timeout(30_000) });
+          const incrementalEvidence = validateIncrementalAcceptanceEvidence({
             projectId,
             initialRunId: created.body.runId,
+            followUpMessageId: followUp.body.messageId,
             followUpRunId: followUp.body.runId,
             initialSnapshotId,
             followUpSnapshotId,
-            browser,
-            beforeExpiry,
-            afterRestore,
-            afterIdeSave,
-            restore: {
-              ...restore,
-              previewHttpStatus: restoredPreview.status,
-              incrementalResultVisible:
-                restoredBrowser.interactions.titleVisible &&
-                restoredBrowser.interactions.filtersVisible
-            },
-            ide,
-            download: {
-              filesMatchServer,
-              fileCount: downloadedFiles.length,
-              unsafePaths,
-              ...clean
-            },
-            expectedInteractions: incrementalEvidence.interactions
+            events: updated.events,
+            beforeFiles,
+            afterFiles,
+            previewUrl: updated.previewUrl,
+            previewHttpStatus: preview.status,
+            ...browserEvidence
           });
-          console.info(formatPersistenceAcceptanceReport(persistenceEvidence));
-          console.info("10/10 Cleaning up the persistence acceptance project...");
-          await jsonRequest(`/api/projects/${projectId}`, { method: "DELETE" });
-          projectId = undefined;
-          console.info("Persistence, recovery, and download production acceptance passed.");
-          process.exitCode = 0;
+          console.info(formatIncrementalAcceptanceReport(incrementalEvidence));
+          if (persistenceOnly) {
+            console.info("8/10 Verifying reload, logout/login, and complete server recovery...");
+            const beforeExpiry = await persistenceState();
+            const checkpoint = resolvePersistenceCheckpoint(beforeExpiry);
+            assert.deepEqual(
+              {
+                initialRunId: checkpoint.initialRunId,
+                followUpRunId: checkpoint.followUpRunId,
+                initialSnapshotId: checkpoint.initialSnapshotId,
+                followUpSnapshotId: checkpoint.followUpSnapshotId
+              },
+              {
+                initialRunId: created.body.runId,
+                followUpRunId: followUp.body.runId,
+                initialSnapshotId,
+                followUpSnapshotId
+              },
+              "Durable checkpoint IDs did not match the completed Runs."
+            );
+            const relogin = await runPersistenceReloginBrowserAcceptance({
+              baseUrl,
+              projectId,
+              previewUrl: updated.previewUrl,
+              cookie,
+              email,
+              password,
+              expectedMessages: [fixedPrompt, followUpPrompt],
+              expectedPlanSummary: checkpoint.followUpPlanSummary
+            });
+            cookie = relogin.cookie;
+            const browser = { ...relogin, cookie: undefined };
+            if (persistencePhase === "prepare") {
+              preserveProject = true;
+              console.info(formatPersistenceCheckpointReport(beforeExpiry));
+              console.info(
+                "Persistence prepare deployment passed and preserved the exact checkpoint project."
+              );
+              process.exitCode = 0;
+            } else {
+              await completePersistenceAcceptance({
+                checkpoint,
+                browser,
+                beforeExpiry,
+                expectedInteractions: incrementalEvidence.interactions
+              });
+            }
+          } else {
+            console.info("Cleaning up the incremental acceptance project...");
+            await jsonRequest(`/api/projects/${projectId}`, { method: "DELETE" });
+            projectId = undefined;
+            console.info("Incremental modification production acceptance passed.");
+            process.exitCode = 0;
+          }
         } else {
-          console.info("Cleaning up the incremental acceptance project...");
+          console.info("7/10 Testing manual edit synchronization through the Worker...");
+          const files = (await jsonRequest(`/api/projects/${projectId}/files`)).body.files;
+          const target = files.find((file) => file.path === "src/App.tsx");
+          assert.ok(target, "Generated project is missing src/App.tsx.");
+          const current = (
+            await jsonRequest(
+              `/api/projects/${projectId}/files/content?path=${encodeURIComponent(target.path)}`
+            )
+          ).body;
+          const saved = await jsonRequest(`/api/projects/${projectId}/files/content`, {
+            method: "PUT",
+            body: JSON.stringify({
+              path: target.path,
+              content: `${current.content}\n/* live-smoke-manual-edit */\n`,
+              version: current.version
+            })
+          });
+          await waitForRuntimeJob(saved.body.runtimeJobId);
+
+          console.info("8/10 Testing direct Preview restart/recovery evidence...");
+          const restart = await jsonRequest(`/api/projects/${projectId}/runtime/restart`, {
+            method: "POST"
+          });
+          const restarted = await waitForRuntimeJob(restart.body.runtimeJobId);
+          assert.ok(restarted.previewUrl, "Restart did not return a Preview URL.");
+
+          console.info("9/10 Downloading and validating the source ZIP...");
+          const download = await fetch(`${baseUrl}/api/projects/${projectId}/download`, {
+            headers: { Cookie: cookie },
+            signal: AbortSignal.timeout(30_000)
+          });
+          assert.equal(download.status, 200);
+          const zip = new Uint8Array(await download.arrayBuffer());
+          assert.equal(new DataView(zip.buffer).getUint32(0, true), 0x04034b50);
+
+          console.info("10/10 Cleaning up the smoke-test project...");
           await jsonRequest(`/api/projects/${projectId}`, { method: "DELETE" });
           projectId = undefined;
-          console.info("Incremental modification production acceptance passed.");
-          process.exitCode = 0;
+          console.info("Live production smoke test passed.");
         }
-      } else {
-        console.info("7/10 Testing manual edit synchronization through the Worker...");
-        const files = (await jsonRequest(`/api/projects/${projectId}/files`)).body.files;
-        const target = files.find((file) => file.path === "src/App.tsx");
-        assert.ok(target, "Generated project is missing src/App.tsx.");
-        const current = (
-          await jsonRequest(
-            `/api/projects/${projectId}/files/content?path=${encodeURIComponent(target.path)}`
-          )
-        ).body;
-        const saved = await jsonRequest(`/api/projects/${projectId}/files/content`, {
-          method: "PUT",
-          body: JSON.stringify({
-            path: target.path,
-            content: `${current.content}\n/* live-smoke-manual-edit */\n`,
-            version: current.version
-          })
-        });
-        await waitForRuntimeJob(saved.body.runtimeJobId);
-
-        console.info("8/10 Testing direct Preview restart/recovery evidence...");
-        const restart = await jsonRequest(`/api/projects/${projectId}/runtime/restart`, {
-          method: "POST"
-        });
-        const restarted = await waitForRuntimeJob(restart.body.runtimeJobId);
-        assert.ok(restarted.previewUrl, "Restart did not return a Preview URL.");
-
-        console.info("9/10 Downloading and validating the source ZIP...");
-        const download = await fetch(`${baseUrl}/api/projects/${projectId}/download`, {
-          headers: { Cookie: cookie },
-          signal: AbortSignal.timeout(30_000)
-        });
-        assert.equal(download.status, 200);
-        const zip = new Uint8Array(await download.arrayBuffer());
-        assert.equal(new DataView(zip.buffer).getUint32(0, true), 0x04034b50);
-
-        console.info("10/10 Cleaning up the smoke-test project...");
-        await jsonRequest(`/api/projects/${projectId}`, { method: "DELETE" });
-        projectId = undefined;
-        console.info("Live production smoke test passed.");
       }
     }
   }
 } finally {
-  if (projectId && cookie) {
+  if (projectId && cookie && !preserveProject) {
     await fetch(`${baseUrl}/api/projects/${projectId}`, {
       method: "DELETE",
       headers: { Cookie: cookie }

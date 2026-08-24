@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  formatPersistenceCheckpointReport,
   formatPersistenceAcceptanceReport,
   isUnsafeDownloadPath,
   readStoredZip,
+  resolvePersistenceCheckpoint,
   validatePersistenceAcceptanceEvidence
 } from "./persistence-acceptance.mjs";
 
@@ -126,6 +128,32 @@ function evidence(overrides = {}) {
 
 test("accepts complete persistence, recovery, IDE, and download evidence", () => {
   assert.equal(validatePersistenceAcceptanceEvidence(evidence()).download.fileCount, 3);
+});
+
+test("resolves and formats a resumable credential-free checkpoint", () => {
+  const state = graph("oldsandbox", "https://old.e2b.app", 6);
+  state.runs[1].planSummary = "Add filtering";
+  const checkpoint = resolvePersistenceCheckpoint(state);
+  assert.equal(checkpoint.projectId, ids.projectId);
+  assert.equal(checkpoint.followUpSnapshotId, ids.followUpSnapshotId);
+  const report = formatPersistenceCheckpointReport(state);
+  assert.match(report, new RegExp(ids.projectId));
+  assert.match(report, /E2E_PERSISTENCE_PHASE=resume/);
+  assert.doesNotMatch(report, /password|cookie|source content|storage key/i);
+});
+
+test("rejects an incomplete persistence checkpoint", () => {
+  const state = graph("oldsandbox", "https://old.e2b.app", 6);
+  state.runs[1].planSummary = "Add filtering";
+  state.snapshots.pop();
+  assert.throws(() => resolvePersistenceCheckpoint(state), /both Run Snapshots/);
+});
+
+test("rejects a checkpoint with a broken message relation", () => {
+  const state = graph("oldsandbox", "https://old.e2b.app", 6);
+  state.runs[1].planSummary = "Add filtering";
+  state.messages[3].runId = "88888888-8888-4888-8888-888888888888";
+  assert.throws(() => resolvePersistenceCheckpoint(state), /Messages must reference/);
 });
 
 test("rejects a reused Sandbox after expiry", () => {

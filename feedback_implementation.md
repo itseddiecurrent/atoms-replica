@@ -235,6 +235,14 @@
 
 验收标准：跨刷新、重新登录和 Sandbox 过期后，最终项目状态仍可恢复；下载源码与线上最终版本一致并可独立运行。
 
+#### 实现与当前验收状态
+
+- 已实现完整的浏览器级生产 Gate，覆盖刷新、真实退出/重新登录、Dashboard 与 Workspace 服务端恢复、原 Sandbox 真实过期、Snapshot + Project Files 恢复到新 Sandbox、IDE 可见修改、Runtime Job、ZIP 精确比对以及干净目录独立安装/构建/测试/运行。
+- 首次 Railway 执行已完成两个真实 Agent Runs、增量验收以及刷新和重新登录，但单个 Runner 在内存中等待完整 900 秒生产 TTL 时于最后 43 秒窗口内进入 `Crashed`；该次临时 Project 已由 `finally` 清理，没有可安全续跑的遗留 Project，且未取得恢复、编辑和下载终态证据，因此 Step 8 仍未通过。
+- Gate 已改为同一 commit 的两次确定性部署：`prepare` 完成所有过期前检查，打印包含精确 Project/Run/Snapshot ID 与真实过期时间的脱敏 Checkpoint，保留且仅保留该临时 Project 后以成功状态退出；`resume` 强制要求该精确 Project ID，先验证 owner-scoped durable graph，再执行过期恢复及其余验收，不会重新创建或消耗 Agent Run。
+- Railway `resume` 不再重复 120 秒部署稳定等待；本地 `pnpm test:persistence` 仍默认支持单进程 `full` Gate。恢复阶段新增边界日志，明确区分“已到达真实过期”“恢复完成”“IDE Runtime Job”和“干净下载验证”，避免下次失败只留下一个合并阶段名称。
+- 下一次线上验收须先以 `E2E_PERSISTENCE_PHASE=prepare` 部署并保存 Checkpoint，再在其真实过期时间后以 `resume` 和记录中的精确 `E2E_PERSISTENCE_PROJECT_ID` 重部署同一 commit。只有最终 `Persistence, Recovery, and Download Production Acceptance Record` 输出并自动清理 Project 后才能标记本步骤完成。
+
 ### Step 9：执行自动化生产 Smoke 与故障场景 ⬜ 待完成
 
 1. 使用专用测试账号对公开 URL 执行已有生产 smoke 流程，并保存完整结果。
