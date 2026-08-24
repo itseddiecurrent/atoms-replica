@@ -62,7 +62,7 @@ same browser Gate once with `restartPolicyType: NEVER`. Configure only:
 Do not give this service database, Supabase service-role, Firebase Admin, OpenAI, or E2B keys. A
 successful Deploy Log ends with `Preview production acceptance passed` and contains a
 `Preview Production Acceptance Record`. The first lines must identify release
-`step6-browser-preview-interaction-v3` and the Railway source commit; reject logs from an older
+`step6-browser-preview-interaction-v4` and the Railway source commit; reject logs from an older
 release even if they were produced by manually restarting an earlier deployment.
 
 ## Log boundary check
