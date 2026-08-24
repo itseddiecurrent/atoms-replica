@@ -17,6 +17,7 @@ for (const path of [".env", ".env.test-account"]) {
 }
 
 const fixedPrompt = "创建一个带添加、完成和删除功能的 Todo App，并显示未完成数量。";
+const acceptanceRunnerRelease = "step5-node-preview-pruned-files-v1";
 const baseUrl = productionBaseUrl(required("E2E_BASE_URL"));
 const email = required("E2E_EMAIL");
 const password = required("E2E_PASSWORD");
@@ -146,6 +147,7 @@ async function waitForRuntimeJob(runtimeJobId) {
 }
 
 try {
+  console.info(`Acceptance runner release: ${acceptanceRunnerRelease}`);
   console.info("1/9 Checking production readiness...");
   const health = await fetch(`${baseUrl}/api/health`, { signal: AbortSignal.timeout(10_000) });
   assert.equal(health.status, 200);
