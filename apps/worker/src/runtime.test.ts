@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ImplementationPlan } from "@atom-replica/agent";
 
 const {
   claimNextRun,
@@ -138,6 +139,7 @@ describe("processNextRuntimeJob", () => {
 describe("processNextRun", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    heartbeatRun.mockResolvedValue(undefined);
     pruneProjectSnapshots.mockResolvedValue([]);
     getProjectAgentContext.mockResolvedValue({ files: [], messages: [] });
     isRunCancelled.mockResolvedValue(false);
@@ -160,6 +162,36 @@ describe("processNextRun", () => {
       "database",
       expect.objectContaining({ type: "run.completed" })
     );
+  });
+
+  it("keeps heartbeating while a provider call is still in progress", async () => {
+    claimNextRun.mockResolvedValue({
+      id: "run-1",
+      projectId: "project-1",
+      triggerMessageId: "message-1"
+    });
+    getMessageContent.mockResolvedValue("Build a dashboard");
+    let resolvePlan!: (plan: ImplementationPlan) => void;
+    const planner = {
+      createPlan: vi.fn(
+        () =>
+          new Promise<ImplementationPlan>((resolve) => {
+            resolvePlan = resolve;
+          })
+      )
+    };
+
+    const processing = processNextRun(
+      "database" as never,
+      "worker-1",
+      planner,
+      undefined,
+      undefined,
+      { heartbeatIntervalMs: 1 }
+    );
+    await vi.waitFor(() => expect(heartbeatRun).toHaveBeenCalled());
+    resolvePlan({ summary: "Plan", assumptions: [], steps: [], acceptanceCriteria: [] });
+    await expect(processing).resolves.toBe(true);
   });
 
   it("does nothing when no queued run is available", async () => {

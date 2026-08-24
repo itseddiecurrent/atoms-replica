@@ -58,11 +58,12 @@ same browser Gate once with `restartPolicyType: NEVER`. Configure only:
 | `E2E_PASSWORD`         | Dedicated test account password     |
 | `E2E_FIREBASE_API_KEY` | Web's browser-safe Firebase API key |
 | `E2E_MAX_WAIT_MS`      | `720000`                            |
+| `E2E_DEPLOY_SETTLE_MS` | `45000`                             |
 
 Do not give this service database, Supabase service-role, Firebase Admin, OpenAI, or E2B keys. A
 successful Deploy Log ends with `Preview production acceptance passed` and contains a
 `Preview Production Acceptance Record`. The first lines must identify release
-`step6-browser-preview-interaction-v4` and the Railway source commit; reject logs from an older
+`step6-browser-preview-interaction-v5` and the Railway source commit; reject logs from an older
 release even if they were produced by manually restarting an earlier deployment.
 
 ## Log boundary check

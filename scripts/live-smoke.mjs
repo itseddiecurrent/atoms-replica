@@ -21,12 +21,15 @@ for (const path of [".env", ".env.test-account"]) {
 }
 
 const fixedPrompt = "创建一个带添加、完成和删除功能的 Todo App，并显示未完成数量。";
-const acceptanceRunnerRelease = "step6-browser-preview-interaction-v4";
+const acceptanceRunnerRelease = "step6-browser-preview-interaction-v5";
 const baseUrl = productionBaseUrl(required("E2E_BASE_URL"));
 const email = required("E2E_EMAIL");
 const password = required("E2E_PASSWORD");
 const firebaseApiKey = process.env.E2E_FIREBASE_API_KEY ?? required("NEXT_PUBLIC_FIREBASE_API_KEY");
 const maxWaitMs = Number(process.env.E2E_MAX_WAIT_MS ?? 12 * 60_000);
+const deploySettleMs = Number(
+  process.env.E2E_DEPLOY_SETTLE_MS ?? (process.env.RAILWAY_GIT_COMMIT_SHA ? 45_000 : 0)
+);
 const initialOnly = process.env.E2E_INITIAL_ONLY === "true";
 const previewOnly = process.env.E2E_PREVIEW_ONLY === "true";
 let projectId;
@@ -160,6 +163,17 @@ try {
   const health = await fetch(`${baseUrl}/api/health`, { signal: AbortSignal.timeout(10_000) });
   assert.equal(health.status, 200);
   assert.equal((await health.json()).database, "ok");
+  if (deploySettleMs > 0) {
+    console.info(
+      `       Waiting ${Math.ceil(deploySettleMs / 1_000)}s for the Worker rollout to settle...`
+    );
+    await new Promise((resolve) => setTimeout(resolve, deploySettleMs));
+    const settledHealth = await fetch(`${baseUrl}/api/health`, {
+      signal: AbortSignal.timeout(10_000)
+    });
+    assert.equal(settledHealth.status, 200);
+    assert.equal((await settledHealth.json()).database, "ok");
+  }
 
   console.info("2/10 Signing in through Firebase and creating a server session...");
   const firebase = await fetch(

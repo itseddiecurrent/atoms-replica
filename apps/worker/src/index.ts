@@ -148,7 +148,8 @@ if (mode === "disabled") {
       buildCommand: SANDBOX_BUILD_COMMAND,
       installTimeoutMs: Number(env.MAX_COMMAND_DURATION_SECONDS) * 1_000,
       buildTimeoutMs: Number(env.MAX_COMMAND_DURATION_SECONDS) * 1_000,
-      maxRunDurationMs: Number(env.MAX_RUN_DURATION_SECONDS) * 1_000
+      maxRunDurationMs: Number(env.MAX_RUN_DURATION_SECONDS) * 1_000,
+      heartbeatIntervalMs: Number(env.RUN_HEARTBEAT_INTERVAL_MS)
     },
     hooks: {
       onError(error, context) {

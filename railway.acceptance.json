@@ -14,7 +14,7 @@
     ]
   },
   "deploy": {
-    "startCommand": "node --enable-source-maps --trace-uncaught scripts/preview-smoke.mjs",
+    "startCommand": "node --trace-uncaught --enable-source-maps scripts/preview-smoke.mjs",
     "restartPolicyType": "NEVER"
   }
 }

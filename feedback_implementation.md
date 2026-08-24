@@ -182,6 +182,7 @@
 - 最新 Runner 已通过 iframe、刷新恢复与 Todo 交互，但在点击 Restart 后以 `Workspace restart did not complete` 超时；该表现与 SSR 按钮已出现、React hydration 尚未绑定点击处理器的竞态一致。Restart 现在会在 hydration 前保持禁用并暴露明确的 client-ready 状态，Runner 等待该状态后再点击，同时将 POST 入队、Runtime Job 成功/失败终态及 UI 成功反馈拆分验证；下一次部署若仍失败，将直接报告具体阶段、HTTP 或 Job 状态，而不再只有笼统的 180 秒超时。
 - 随后的 crash 堆栈仍指向旧版 Runner 的第 619 行，证明 Railway 重启了旧 deployment，而非执行上述修复提交。Runner 现自报 release 与 `RAILWAY_GIT_COMMIT_SHA`，并通过 acceptance 配置变更强制 Web、Worker、Runner 同 commit 重新部署；同时将 Restart 等待预算扩展为 6 分钟，以覆盖 Sandbox 过期后最长 120 秒依赖安装与 120 秒 Preview 健康检查，连接仍存活的 E2B Sandbox 时会续租 TTL 并刷新数据库到期时间。
 - 部署前还确认 Release gate 自首次提交起一直因两个 clean-checkout 问题失败：被跳过的 Supabase 集成测试仍过早解析密钥环境，且 Worker 测试前未构建 workspace packages。环境解析现延迟到集成 suite 真正运行时，根测试通过 `pretest` 先构建内部 packages；修复已在无 `.env` 的全新 Node 24 checkout 中通过，并由 GitHub Actions `30a914c` 首次取得成功终态。
+- v4 Runner 已确认执行新代码，但在首次生成阶段收到 `RUN_TIMEOUT / Worker heartbeat expired`。根因是已配置的 `RUN_HEARTBEAT_INTERVAL_MS=5000` 从未接入 Agent Run，长于 30 秒的模型/Sandbox 调用在滚动部署的新旧 Worker 重叠期会被误判为 stale。Worker 现从认领 Run 到最终 usage 记录持续发送 heartbeat，Railway Runner 也会在健康检查后等待 45 秒部署稳定窗口再创建验收项目。
 
 ### Step 7：验收同一项目的增量修改 ⬜ 待完成
 

@@ -81,6 +81,7 @@ type ValidationOptions = {
   buildTimeoutMs?: number;
   maxRunDurationMs?: number;
   cancellationPollMs?: number;
+  heartbeatIntervalMs?: number;
 };
 
 type SnapshotStore = {
@@ -226,6 +227,15 @@ export async function processNextRun(
   let retryCount = 0;
   let sandboxStartedAt: number | undefined;
   let runContext: RunContext | undefined;
+  const heartbeat = setInterval(() => {
+    void heartbeatRun(db, run.id, workerId).catch((error) =>
+      hooks.onError?.(error, {
+        runId: run.id,
+        projectId: run.projectId,
+        code: errorCodes.INTERNAL_ERROR
+      })
+    );
+  }, validationOptions.heartbeatIntervalMs ?? 5_000);
 
   async function checkBoundary() {
     if (await isRunCancelled(db, claimedRun.id)) throw new RunCancelledError();
@@ -618,6 +628,7 @@ export async function processNextRun(
       });
     }
   } finally {
+    clearInterval(heartbeat);
     try {
       await recordRunUsage(db, {
         runId: run.id,
