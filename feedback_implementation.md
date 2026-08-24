@@ -186,6 +186,10 @@
 - v5 的 Railway 状态时间进一步证明部署竞态：Runner 于 08:21:59 启动并在 45 秒后放行，新 Worker 直到 08:22:53 才成功，旧 Worker 因而提前认领了 Run；Runner 在 stale 阈值后于 08:23:23 失败。Railway 默认稳定窗口现提高到 120 秒，覆盖本次实测 54 秒的服务启动差，并确保项目只在新 Worker 稳定轮询后创建。
 - v6 已证明首次生成、持续 heartbeat、独立验证、HTTPS Preview 和持久化成功，随后浏览器 Gate 暴露模型合理生成了 3 条示例 Todo，且计数文案使用 aria-label `还有 N 项未完成`/可见文案 `还剩 N 项任务`。Gate 现先通过 UI 清空种子任务，再严格执行两条添加及 `2 → 1 → 2 → 1`；计数识别同时覆盖可见与无障碍文案，不再假设固定 Prompt 必然生成空列表或某一种措辞。
 - 同一生产诊断还捕获到 Railway SSE socket 的真实传输中断；`consumeRun` 现对连接建立失败与 `reader.read()` 中断均使用最后一个 Event ID 自动恢复，保持事件去重与终态失败语义，不再因一次 `UND_ERR_SOCKET` 提前终止验收。
+- v7 已通过种子 Todo 清理、两条 Todo、计数变化、Workspace 刷新恢复和 Restart UI 入队，失败推进到 Worker 的真实 `restart_preview` Runtime Job；旧错误只持久化通用重试文案，无法区分 E2B reconnect、TTL 续租、恢复、进程重启或公网健康检查。
+- 已核对项目锁定的 E2B SDK 及官方接口：`Sandbox.connect(id, opts)` 负责连接/恢复，Sandbox 生命周期必须随后通过独立的 `setTimeout(timeoutMs, opts)` 续租。两次控制面请求现均使用显式 `requestTimeoutMs`，并分别记录 `SANDBOX_RECONNECT_FAILED` 与 `SANDBOX_TTL_RENEWAL_FAILED`。
+- 代码审计确认过期 Sandbox 的恢复路径只执行了 `npm install`，却直接启动仅服务 `dist` 的静态 Preview；Snapshot 和 Project Files 本来就不保存 `dist`，因此恢复后的服务必然缺少构建输出。恢复现会在启动 Preview 前执行独立 `npm run build`，并对恢复文件、安装、构建、Preview prepare/stop/start/health 和数据库保存持久化脱敏阶段错误码。
+- v8 修复已在 Node 24 完整 Release gate 中通过，且不新增数据库迁移；阶段码保存在 Runtime Job 现有 durable `result_json`，UI 与 Runner 会显示阶段码和安全消息，而 Provider 原始异常、源码与凭据不会进入 Runtime Job。仍须由同 commit 的 Railway Web/Worker/Runner 重新产出成功记录并完成日志边界复核后，Step 6 才能标记完成。
 
 ### Step 7：验收同一项目的增量修改 ⬜ 待完成
 

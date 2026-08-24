@@ -29,7 +29,7 @@ import {
 } from "@atom-replica/shared";
 import { parseWorkerEnv } from "@atom-replica/shared/env";
 
-import { getWorkerMode, startWorker } from "./runtime.js";
+import { RuntimeJobProcessingError, getWorkerMode, startWorker } from "./runtime.js";
 
 config({ path: resolve(process.cwd(), "../../.env"), quiet: true });
 
@@ -59,6 +59,19 @@ if (mode === "disabled") {
   }
   console.info(`[worker] Polling every ${env.WORKER_POLL_INTERVAL_MS}ms as ${workerId}.`);
 
+  async function runtimeJobStage<T>(
+    code: string,
+    message: string,
+    operation: () => Promise<T>
+  ): Promise<T> {
+    try {
+      return await operation();
+    } catch (error) {
+      if (error instanceof RuntimeJobProcessingError) throw error;
+      throw new RuntimeJobProcessingError(code, message, { cause: error });
+    }
+  }
+
   async function prepareProjectSandbox(projectId: string) {
     const sandbox = new E2BSandboxAdapter({
       sdk: createE2BSandboxSdk(env.E2B_API_KEY),
@@ -68,18 +81,42 @@ if (mode === "disabled") {
       commandTimeoutMs: Number(env.MAX_COMMAND_DURATION_SECONDS) * 1_000,
       onProviderCall: (call) => logProviderCall({ provider: "e2b", ...call })
     });
-    const state = await getProjectRuntimeState(database.db, projectId);
-    if (!state) throw new Error("Project runtime state was not found.");
-    const projectFiles = await listProjectFiles(database.db, projectId);
+    const state = await runtimeJobStage(
+      "RUNTIME_STATE_LOAD_FAILED",
+      "Could not load the saved project runtime state.",
+      () => getProjectRuntimeState(database.db, projectId)
+    );
+    if (!state)
+      throw new RuntimeJobProcessingError(
+        "RUNTIME_STATE_NOT_FOUND",
+        "Project runtime state was not found."
+      );
+    const projectFiles = await runtimeJobStage(
+      "RUNTIME_FILES_LOAD_FAILED",
+      "Could not load the saved project files.",
+      () => listProjectFiles(database.db, projectId)
+    );
     if (state.project.sandboxId || state.snapshot || projectFiles.length) {
       let snapshotFiles: Array<{ path: string; content: string }> = [];
       if (state.snapshot) {
-        const { data, error } = await observeProviderCall(
-          { provider: "supabase", operation: "storage.download" },
-          () => snapshotBucket.download(state.snapshot!.storageKey)
+        const { data, error } = await runtimeJobStage(
+          "SNAPSHOT_DOWNLOAD_FAILED",
+          "Could not download the saved project Snapshot.",
+          () =>
+            observeProviderCall({ provider: "supabase", operation: "storage.download" }, () =>
+              snapshotBucket.download(state.snapshot!.storageKey)
+            )
         );
-        if (error) throw error;
-        snapshotFiles = readProjectZip(new Uint8Array(await data.arrayBuffer()));
+        if (error)
+          throw new RuntimeJobProcessingError(
+            "SNAPSHOT_DOWNLOAD_FAILED",
+            "Could not download the saved project Snapshot."
+          );
+        snapshotFiles = await runtimeJobStage(
+          "SNAPSHOT_RESTORE_FAILED",
+          "Could not read the saved project Snapshot.",
+          async () => readProjectZip(new Uint8Array(await data.arrayBuffer()))
+        );
       }
       const restored = await ensureSandbox({
         adapter: sandbox,
@@ -89,13 +126,22 @@ if (mode === "disabled") {
         projectFiles,
         previewPort: Number(env.E2B_PREVIEW_PORT)
       });
-      await saveProjectSandbox(database.db, {
-        projectId,
-        sandboxId: restored.sandboxId,
-        expiresAt: new Date(Date.now() + Number(env.E2B_SANDBOX_TIMEOUT_SECONDS) * 1000)
-      });
+      await runtimeJobStage(
+        "SANDBOX_STATE_SAVE_FAILED",
+        "Could not save the active Sandbox state.",
+        () =>
+          saveProjectSandbox(database.db, {
+            projectId,
+            sandboxId: restored.sandboxId,
+            expiresAt: new Date(Date.now() + Number(env.E2B_SANDBOX_TIMEOUT_SECONDS) * 1000)
+          })
+      );
       if (restored.created && restored.previewUrl)
-        await saveProjectPreview(database.db, { projectId, previewUrl: restored.previewUrl });
+        await runtimeJobStage(
+          "PREVIEW_SAVE_FAILED",
+          "Could not save the restored Preview URL.",
+          () => saveProjectPreview(database.db, { projectId, previewUrl: restored.previewUrl! })
+        );
       return {
         sandbox,
         projectFiles,
@@ -104,11 +150,16 @@ if (mode === "disabled") {
       };
     }
     const sandboxId = await sandbox.create();
-    await saveProjectSandbox(database.db, {
-      projectId,
-      sandboxId,
-      expiresAt: new Date(Date.now() + Number(env.E2B_SANDBOX_TIMEOUT_SECONDS) * 1000)
-    });
+    await runtimeJobStage(
+      "SANDBOX_STATE_SAVE_FAILED",
+      "Could not save the new Sandbox state.",
+      () =>
+        saveProjectSandbox(database.db, {
+          projectId,
+          sandboxId,
+          expiresAt: new Date(Date.now() + Number(env.E2B_SANDBOX_TIMEOUT_SECONDS) * 1000)
+        })
+    );
     return { sandbox, projectFiles, created: true, previewUrl: undefined };
   }
 
@@ -167,10 +218,21 @@ if (mode === "disabled") {
             ? (job.payloadJson as { path?: unknown })
             : {};
         if (typeof payload.path !== "string" || !shouldIncludeProjectFile(payload.path))
-          throw new Error("Runtime file path is invalid.");
+          throw new RuntimeJobProcessingError(
+            "RUNTIME_FILE_INVALID",
+            "Runtime file path is invalid."
+          );
         const file = prepared.projectFiles.find(({ path }) => path === payload.path);
-        if (!file) throw new Error("Runtime file no longer exists.");
-        await prepared.sandbox.writeFile(file.path, file.content);
+        if (!file)
+          throw new RuntimeJobProcessingError(
+            "RUNTIME_FILE_NOT_FOUND",
+            "Runtime file no longer exists."
+          );
+        await runtimeJobStage(
+          "RUNTIME_FILE_SYNC_FAILED",
+          "Could not synchronize the saved file into the Sandbox.",
+          () => prepared.sandbox.writeFile(file.path, file.content)
+        );
         return {
           operation: "sync_file",
           path: file.path,
@@ -185,7 +247,11 @@ if (mode === "disabled") {
         prepared.created && prepared.previewUrl
           ? prepared.previewUrl
           : await prepared.sandbox.getPreviewUrl(Number(env.E2B_PREVIEW_PORT));
-      await saveProjectPreview(database.db, { projectId: job.projectId, previewUrl });
+      await runtimeJobStage(
+        "PREVIEW_SAVE_FAILED",
+        "Could not save the restarted Preview URL.",
+        () => saveProjectPreview(database.db, { projectId: job.projectId, previewUrl })
+      );
       return { operation: "restart_preview", previewUrl };
     },
     coderFactory: async (run) => {

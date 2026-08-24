@@ -78,7 +78,12 @@ vi.mock("@atom-replica/db", () => ({
   createDatabaseClient: vi.fn()
 }));
 
-import { getWorkerMode, processNextRun, processNextRuntimeJob } from "./runtime";
+import {
+  RuntimeJobProcessingError,
+  getWorkerMode,
+  processNextRun,
+  processNextRuntimeJob
+} from "./runtime";
 
 describe("getWorkerMode", () => {
   it("disables polling only for the explicit true value", () => {
@@ -127,12 +132,38 @@ describe("processNextRuntimeJob", () => {
     expect(failRuntimeJob).toHaveBeenCalledWith("database", {
       runtimeJobId: "job-1",
       workerId: "worker-1",
+      code: "RUNTIME_OPERATION_FAILED",
       message: "Runtime operation failed. Retry the operation."
     });
     expect(onError).toHaveBeenCalledWith(
       expect.any(Error),
       expect.objectContaining({ projectId: "project-1", code: "SANDBOX_FAILED" })
     );
+    expect((onError.mock.calls[0]?.[0] as Error).message).not.toContain("provider secret detail");
+  });
+
+  it("persists a safe stage code without exposing the provider cause", async () => {
+    claimNextRuntimeJob.mockResolvedValue({
+      id: "job-1",
+      projectId: "project-1",
+      type: "restart_preview",
+      payloadJson: {}
+    });
+    await processNextRuntimeJob(
+      "database" as never,
+      "worker-1",
+      vi.fn().mockRejectedValue(
+        new RuntimeJobProcessingError("PREVIEW_SAVE_FAILED", "Could not save the Preview URL.", {
+          cause: new Error("secret provider response")
+        })
+      )
+    );
+    expect(failRuntimeJob).toHaveBeenCalledWith("database", {
+      runtimeJobId: "job-1",
+      workerId: "worker-1",
+      code: "PREVIEW_SAVE_FAILED",
+      message: "Could not save the Preview URL."
+    });
   });
 });
 

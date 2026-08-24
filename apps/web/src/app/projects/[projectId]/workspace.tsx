@@ -336,12 +336,18 @@ export function Workspace({
       const job = (await response.json()) as {
         status?: "queued" | "processing" | "completed" | "failed";
         resultJson?: { previewUrl?: string | null };
+        errorCode?: string | null;
         errorMessage?: string | null;
         error?: string;
       };
       if (!response.ok) throw new Error(job.error ?? "Unable to check runtime operation.");
       if (job.status === "completed") return job.resultJson ?? {};
-      if (job.status === "failed") throw new Error(job.errorMessage ?? "Runtime operation failed.");
+      if (job.status === "failed")
+        throw new Error(
+          [job.errorCode, job.errorMessage ?? "Runtime operation failed."]
+            .filter(Boolean)
+            .join(": ")
+        );
       await new Promise((resolve) => setTimeout(resolve, 750));
     }
     throw new Error("Runtime operation timed out. The Worker may be unavailable.");

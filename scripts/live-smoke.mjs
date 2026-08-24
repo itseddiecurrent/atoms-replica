@@ -21,7 +21,7 @@ for (const path of [".env", ".env.test-account"]) {
 }
 
 const fixedPrompt = "创建一个带添加、完成和删除功能的 Todo App，并显示未完成数量。";
-const acceptanceRunnerRelease = "step6-browser-preview-interaction-v7";
+const acceptanceRunnerRelease = "step6-browser-preview-interaction-v8";
 const baseUrl = productionBaseUrl(required("E2E_BASE_URL"));
 const email = required("E2E_EMAIL");
 const password = required("E2E_PASSWORD");

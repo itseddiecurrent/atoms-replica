@@ -7,6 +7,47 @@ export const SANDBOX_INSTALL_COMMAND = "npm install --no-audit --no-fund";
 export const SANDBOX_BUILD_COMMAND = "npm run build";
 const SANDBOX_PREVIEW_SERVER_PATH = "/tmp/atom-replica-preview.mjs";
 const SANDBOX_IGNORED_SEGMENTS = new Set(["node_modules", ".git", "dist", ".vite", "coverage"]);
+
+export const sandboxLifecycleErrorCodes = {
+  SANDBOX_RECONNECT_FAILED: "SANDBOX_RECONNECT_FAILED",
+  SANDBOX_TTL_RENEWAL_FAILED: "SANDBOX_TTL_RENEWAL_FAILED",
+  SANDBOX_CREATE_FAILED: "SANDBOX_CREATE_FAILED",
+  SANDBOX_TEMPLATE_FAILED: "SANDBOX_TEMPLATE_FAILED",
+  SANDBOX_RESTORE_FILES_FAILED: "SANDBOX_RESTORE_FILES_FAILED",
+  SANDBOX_RESTORE_INSTALL_FAILED: "SANDBOX_RESTORE_INSTALL_FAILED",
+  SANDBOX_RESTORE_BUILD_FAILED: "SANDBOX_RESTORE_BUILD_FAILED",
+  PREVIEW_PREPARE_FAILED: "PREVIEW_PREPARE_FAILED",
+  PREVIEW_STOP_FAILED: "PREVIEW_STOP_FAILED",
+  PREVIEW_START_FAILED: "PREVIEW_START_FAILED",
+  PREVIEW_HEALTH_FAILED: "PREVIEW_HEALTH_FAILED"
+} as const;
+
+export type SandboxLifecycleErrorCode =
+  (typeof sandboxLifecycleErrorCodes)[keyof typeof sandboxLifecycleErrorCodes];
+
+export class SandboxLifecycleError extends Error {
+  constructor(
+    readonly code: SandboxLifecycleErrorCode,
+    message: string,
+    options?: ErrorOptions
+  ) {
+    super(message, options);
+    this.name = "SandboxLifecycleError";
+  }
+}
+
+async function sandboxStage<T>(
+  code: SandboxLifecycleErrorCode,
+  message: string,
+  operation: () => Promise<T>
+): Promise<T> {
+  try {
+    return await operation();
+  } catch (error) {
+    if (error instanceof SandboxLifecycleError) throw error;
+    throw new SandboxLifecycleError(code, message, { cause: error });
+  }
+}
 export const SANDBOX_PREVIEW_SERVER_SOURCE = `import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import { createServer } from "node:http";
@@ -88,28 +129,75 @@ export async function ensureSandbox(options: {
   now?: Date;
 }): Promise<{ sandboxId: string; created: boolean; previewUrl?: string }> {
   const now = options.now ?? new Date();
+  let recoveryFrom: SandboxLifecycleErrorCode | undefined;
   if (options.sandboxId && options.sandboxExpiresAt && options.sandboxExpiresAt > now) {
     try {
       await options.adapter.connect(options.sandboxId);
       return { sandboxId: options.sandboxId, created: false };
-    } catch {
+    } catch (error) {
+      recoveryFrom =
+        error instanceof SandboxLifecycleError
+          ? error.code
+          : sandboxLifecycleErrorCodes.SANDBOX_RECONNECT_FAILED;
       // Recreate below when E2B no longer has the recorded sandbox.
     }
   }
 
-  const sandboxId = await options.adapter.create();
-  for (const file of options.snapshotFiles ?? [])
-    await options.adapter.writeFile(file.path, file.content);
-  for (const file of options.projectFiles) await options.adapter.writeFile(file.path, file.content);
-  const install = await options.adapter.runCommand(SANDBOX_INSTALL_COMMAND, {
-    timeoutMs: 120_000
-  });
-  if (install.exitCode !== 0)
-    throw new Error(`Sandbox restore install failed: ${install.stderr || install.stdout}`);
-  await options.adapter.startDevServer(
-    options.previewPort ? { port: options.previewPort } : undefined
+  const recoverySuffix = recoveryFrom ? ` after ${recoveryFrom}` : "";
+  const sandboxId = await sandboxStage(
+    sandboxLifecycleErrorCodes.SANDBOX_CREATE_FAILED,
+    `Could not create a replacement Sandbox${recoverySuffix}.`,
+    () => options.adapter.create()
   );
-  const previewUrl = await options.adapter.getPreviewUrl(options.previewPort);
+  await sandboxStage(
+    sandboxLifecycleErrorCodes.SANDBOX_RESTORE_FILES_FAILED,
+    "Could not restore the saved project files into the Sandbox.",
+    async () => {
+      for (const file of options.snapshotFiles ?? [])
+        await options.adapter.writeFile(file.path, file.content);
+      for (const file of options.projectFiles)
+        await options.adapter.writeFile(file.path, file.content);
+    }
+  );
+  const install = await sandboxStage(
+    sandboxLifecycleErrorCodes.SANDBOX_RESTORE_INSTALL_FAILED,
+    "Could not install dependencies while restoring the Sandbox.",
+    () =>
+      options.adapter.runCommand(SANDBOX_INSTALL_COMMAND, {
+        timeoutMs: 120_000
+      })
+  );
+  if (install.exitCode !== 0)
+    throw new SandboxLifecycleError(
+      sandboxLifecycleErrorCodes.SANDBOX_RESTORE_INSTALL_FAILED,
+      `Sandbox dependency restore exited with code ${install.exitCode}.`
+    );
+  const build = await sandboxStage(
+    sandboxLifecycleErrorCodes.SANDBOX_RESTORE_BUILD_FAILED,
+    "Could not build the restored project.",
+    () =>
+      options.adapter.runCommand(SANDBOX_BUILD_COMMAND, {
+        timeoutMs: 120_000
+      })
+  );
+  if (build.exitCode !== 0)
+    throw new SandboxLifecycleError(
+      sandboxLifecycleErrorCodes.SANDBOX_RESTORE_BUILD_FAILED,
+      `Sandbox restore build exited with code ${build.exitCode}.`
+    );
+  await sandboxStage(
+    sandboxLifecycleErrorCodes.PREVIEW_START_FAILED,
+    "Could not start the restored Preview process.",
+    () =>
+      options.adapter.startDevServer(
+        options.previewPort ? { port: options.previewPort } : undefined
+      )
+  );
+  const previewUrl = await sandboxStage(
+    sandboxLifecycleErrorCodes.PREVIEW_HEALTH_FAILED,
+    "The restored Preview did not become healthy.",
+    () => options.adapter.getPreviewUrl(options.previewPort)
+  );
   return { sandboxId, created: true, previewUrl };
 }
 
@@ -143,13 +231,13 @@ export interface E2BSandboxClient {
   files: E2BFileSystem;
   commands: E2BCommands;
   kill(): Promise<void>;
-  setTimeout(timeoutMs: number): Promise<void>;
+  setTimeout(timeoutMs: number, options?: { requestTimeoutMs?: number }): Promise<void>;
   getHost(port: number): string;
 }
 
 export interface E2BSandboxSdk {
   create(options?: { template?: string; timeoutMs?: number }): Promise<E2BSandboxClient>;
-  connect(sandboxId: string): Promise<E2BSandboxClient>;
+  connect(sandboxId: string, options?: { requestTimeoutMs?: number }): Promise<E2BSandboxClient>;
 }
 
 export interface E2BAdapterOptions {
@@ -182,8 +270,11 @@ export function createE2BSandboxSdk(apiKey = process.env.E2B_API_KEY): E2BSandbo
         : await Sandbox.create(connectionOptions);
       return sandbox as unknown as E2BSandboxClient;
     },
-    async connect(sandboxId) {
-      const sandbox = await Sandbox.connect(sandboxId, apiKey ? { apiKey } : undefined);
+    async connect(sandboxId, options = {}) {
+      const sandbox = await Sandbox.connect(sandboxId, {
+        ...(apiKey ? { apiKey } : {}),
+        ...options
+      });
       return sandbox as unknown as E2BSandboxClient;
     }
   };
@@ -276,11 +367,16 @@ export class E2BSandboxAdapter implements SandboxAdapter {
   }
 
   async create(): Promise<string> {
-    const sandbox = await this.observe("sandbox.create", () =>
-      this.options.sdk.create({
-        ...(this.options.templateId ? { template: this.options.templateId } : {}),
-        timeoutMs: this.options.timeoutMs
-      })
+    const sandbox = await sandboxStage(
+      sandboxLifecycleErrorCodes.SANDBOX_CREATE_FAILED,
+      "Could not create the E2B Sandbox.",
+      () =>
+        this.observe("sandbox.create", () =>
+          this.options.sdk.create({
+            ...(this.options.templateId ? { template: this.options.templateId } : {}),
+            timeoutMs: this.options.timeoutMs
+          })
+        )
     );
     this.sandbox = sandbox;
     try {
@@ -294,16 +390,36 @@ export class E2BSandboxAdapter implements SandboxAdapter {
     } catch (error) {
       await sandbox.kill().catch(() => undefined);
       this.sandbox = undefined;
-      throw error;
+      throw new SandboxLifecycleError(
+        sandboxLifecycleErrorCodes.SANDBOX_TEMPLATE_FAILED,
+        "Could not prepare the fixed Sandbox template.",
+        { cause: error }
+      );
     }
     return sandbox.sandboxId;
   }
 
   async connect(sandboxId: string): Promise<void> {
-    const sandbox = await this.observe("sandbox.connect", () =>
-      this.options.sdk.connect(sandboxId)
+    const sandbox = await sandboxStage(
+      sandboxLifecycleErrorCodes.SANDBOX_RECONNECT_FAILED,
+      "Could not reconnect to the existing E2B Sandbox.",
+      () =>
+        this.observe("sandbox.connect", () =>
+          this.options.sdk.connect(sandboxId, {
+            requestTimeoutMs: this.options.commandTimeoutMs
+          })
+        )
     );
-    await this.observe("sandbox.extend_timeout", () => sandbox.setTimeout(this.options.timeoutMs));
+    await sandboxStage(
+      sandboxLifecycleErrorCodes.SANDBOX_TTL_RENEWAL_FAILED,
+      "Could not renew the E2B Sandbox lifetime.",
+      () =>
+        this.observe("sandbox.extend_timeout", () =>
+          sandbox.setTimeout(this.options.timeoutMs, {
+            requestTimeoutMs: this.options.commandTimeoutMs
+          })
+        )
+    );
     this.sandbox = sandbox;
   }
 
@@ -401,22 +517,37 @@ export class E2BSandboxAdapter implements SandboxAdapter {
         Math.min(this.options.maxOutputChars, 2_000)
       );
     };
-    await this.observe("preview.prepare", () =>
-      this.requireSandbox()
-        .files.write(SANDBOX_PREVIEW_SERVER_PATH, SANDBOX_PREVIEW_SERVER_SOURCE)
-        .then(() => undefined)
+    await sandboxStage(
+      sandboxLifecycleErrorCodes.PREVIEW_PREPARE_FAILED,
+      "Could not prepare the Preview server.",
+      () =>
+        this.observe("preview.prepare", () =>
+          this.requireSandbox()
+            .files.write(SANDBOX_PREVIEW_SERVER_PATH, SANDBOX_PREVIEW_SERVER_SOURCE)
+            .then(() => undefined)
+        )
     );
-    await this.requireSandbox().commands.run(
-      `pkill -f '/tmp/[a]tom-replica-preview.mjs ${port}' || true`,
-      { cwd: SANDBOX_WORKDIR, timeoutMs: 10_000 }
+    await sandboxStage(
+      sandboxLifecycleErrorCodes.PREVIEW_STOP_FAILED,
+      "Could not stop the previous Preview process.",
+      () =>
+        this.requireSandbox().commands.run(
+          `pkill -f '/tmp/[a]tom-replica-preview.mjs ${port}' || true`,
+          { cwd: SANDBOX_WORKDIR, timeoutMs: 10_000 }
+        )
     );
-    const process = await this.observe("preview.start", () =>
-      this.requireSandbox().commands.run(sandboxPreviewCommand(port), {
-        cwd: SANDBOX_WORKDIR,
-        background: true,
-        onStdout: captureOutput,
-        onStderr: captureOutput
-      })
+    const process = await sandboxStage(
+      sandboxLifecycleErrorCodes.PREVIEW_START_FAILED,
+      "Could not start the Preview process.",
+      () =>
+        this.observe("preview.start", () =>
+          this.requireSandbox().commands.run(sandboxPreviewCommand(port), {
+            cwd: SANDBOX_WORKDIR,
+            background: true,
+            onStdout: captureOutput,
+            onStderr: captureOutput
+          })
+        )
     );
     this.previewProcessState = "running";
     if (typeof process.wait === "function") {
@@ -445,50 +576,56 @@ export class E2BSandboxAdapter implements SandboxAdapter {
   }
 
   async getPreviewUrl(port = this.options.previewPort): Promise<string> {
-    return this.observe("preview.health", async () => {
-      const host = this.requireSandbox().getHost(port);
-      const url = /^https?:\/\//i.test(host) ? host : `https://${host}`;
-      const deadline = Date.now() + this.options.commandTimeoutMs;
-      let lastError: unknown;
-      while (Date.now() < deadline) {
-        try {
-          const response = await (this.options.fetchImpl ?? fetch)(url, {
-            headers: { "Cache-Control": "no-cache" },
-            signal: AbortSignal.timeout(Math.min(10_000, Math.max(1, deadline - Date.now())))
-          });
-          if (response.ok) return url;
-          lastError = new Error(`Preview returned HTTP ${response.status}`);
-        } catch (error) {
-          lastError = error;
-        }
-        await new Promise((resolvePromise) => setTimeout(resolvePromise, 500));
-      }
-      let localProbe = "unavailable";
-      try {
-        const result = await this.requireSandbox().commands.run(
-          `node -e "fetch('http://127.0.0.1:${port}').then(r=>{console.log('HTTP '+r.status);process.exit(r.ok?0:1)}).catch(e=>{console.error(e.cause?.code||e.message);process.exit(1)})"`,
-          { cwd: SANDBOX_WORKDIR, timeoutMs: 10_000 }
-        );
-        localProbe = capOutput(
-          (result.stdout || result.stderr || `exit ${result.exitCode ?? "unknown"}`).trim(),
-          300
-        );
-      } catch (error) {
-        const record = error && typeof error === "object" ? (error as Record<string, unknown>) : {};
-        localProbe = capOutput(
-          String(record.stderr ?? record.stdout ?? record.message ?? "probe failed").trim(),
-          300
-        );
-      }
-      const processOutput = this.previewProcessOutput.trim()
-        ? ` Output: ${this.previewProcessOutput.trim()}`
-        : "";
-      throw new Error(
-        `Preview did not become healthy before timeout: ${String(lastError)}. ` +
-          `Sandbox-local probe: ${localProbe || "no output"}. ` +
-          `Preview process: ${this.previewProcessState}.${processOutput}`
-      );
-    });
+    return sandboxStage(
+      sandboxLifecycleErrorCodes.PREVIEW_HEALTH_FAILED,
+      "The Preview did not become healthy.",
+      () =>
+        this.observe("preview.health", async () => {
+          const host = this.requireSandbox().getHost(port);
+          const url = /^https?:\/\//i.test(host) ? host : `https://${host}`;
+          const deadline = Date.now() + this.options.commandTimeoutMs;
+          let lastError: unknown;
+          while (Date.now() < deadline) {
+            try {
+              const response = await (this.options.fetchImpl ?? fetch)(url, {
+                headers: { "Cache-Control": "no-cache" },
+                signal: AbortSignal.timeout(Math.min(10_000, Math.max(1, deadline - Date.now())))
+              });
+              if (response.ok) return url;
+              lastError = new Error(`Preview returned HTTP ${response.status}`);
+            } catch (error) {
+              lastError = error;
+            }
+            await new Promise((resolvePromise) => setTimeout(resolvePromise, 500));
+          }
+          let localProbe = "unavailable";
+          try {
+            const result = await this.requireSandbox().commands.run(
+              `node -e "fetch('http://127.0.0.1:${port}').then(r=>{console.log('HTTP '+r.status);process.exit(r.ok?0:1)}).catch(e=>{console.error(e.cause?.code||e.message);process.exit(1)})"`,
+              { cwd: SANDBOX_WORKDIR, timeoutMs: 10_000 }
+            );
+            localProbe = capOutput(
+              (result.stdout || result.stderr || `exit ${result.exitCode ?? "unknown"}`).trim(),
+              300
+            );
+          } catch (error) {
+            const record =
+              error && typeof error === "object" ? (error as Record<string, unknown>) : {};
+            localProbe = capOutput(
+              String(record.stderr ?? record.stdout ?? record.message ?? "probe failed").trim(),
+              300
+            );
+          }
+          const processOutput = this.previewProcessOutput.trim()
+            ? ` Output: ${this.previewProcessOutput.trim()}`
+            : "";
+          throw new Error(
+            `Preview did not become healthy before timeout: ${String(lastError)}. ` +
+              `Sandbox-local probe: ${localProbe || "no output"}. ` +
+              `Preview process: ${this.previewProcessState}.${processOutput}`
+          );
+        })
+    );
   }
 
   async kill(sandboxId?: string): Promise<void> {

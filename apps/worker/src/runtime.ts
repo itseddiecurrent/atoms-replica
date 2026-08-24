@@ -115,6 +115,32 @@ type RuntimeJobHandler = (
   job: ClaimedRuntimeJob
 ) => Promise<Record<string, string | number | boolean | null>>;
 
+export class RuntimeJobProcessingError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+    options?: ErrorOptions
+  ) {
+    super(message, options);
+    this.name = "RuntimeJobProcessingError";
+  }
+}
+
+function classifyRuntimeJobError(error: unknown) {
+  const record = error && typeof error === "object" ? (error as Record<string, unknown>) : {};
+  if (
+    error instanceof RuntimeJobProcessingError ||
+    (record.name === "SandboxLifecycleError" &&
+      typeof record.code === "string" &&
+      typeof record.message === "string")
+  )
+    return { code: String(record.code), message: String(record.message) };
+  return {
+    code: "RUNTIME_OPERATION_FAILED",
+    message: "Runtime operation failed. Retry the operation."
+  };
+}
+
 export async function processNextRuntimeJob(
   db: Database,
   workerId: string,
@@ -137,12 +163,13 @@ export async function processNextRuntimeJob(
     const result = await handler(job);
     await completeRuntimeJob(db, { runtimeJobId: job.id, workerId, result });
   } catch (error) {
+    const classified = classifyRuntimeJobError(error);
     await failRuntimeJob(db, {
       runtimeJobId: job.id,
       workerId,
-      message: "Runtime operation failed. Retry the operation."
+      ...classified
     });
-    hooks.onError?.(error, {
+    hooks.onError?.(new Error(`${classified.code}: ${classified.message}`), {
       runId: job.id,
       projectId: job.projectId,
       code: errorCodes.SANDBOX_FAILED

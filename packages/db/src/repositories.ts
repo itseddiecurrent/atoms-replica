@@ -534,7 +534,15 @@ export async function getRuntimeJobForUser(
     .innerJoin(projects, eq(runtimeJobs.projectId, projects.id))
     .where(and(eq(runtimeJobs.id, input.runtimeJobId), eq(projects.userId, input.userId)))
     .limit(1);
-  return job;
+  if (!job) return undefined;
+  const result =
+    job.resultJson && typeof job.resultJson === "object"
+      ? (job.resultJson as Record<string, unknown>)
+      : {};
+  return {
+    ...job,
+    errorCode: typeof result.errorCode === "string" ? result.errorCode : null
+  };
 }
 
 export async function claimNextRuntimeJob(
@@ -589,11 +597,16 @@ export async function completeRuntimeJob(
 
 export async function failRuntimeJob(
   db: Database,
-  input: { runtimeJobId: string; workerId: string; message: string }
+  input: { runtimeJobId: string; workerId: string; code: string; message: string }
 ) {
   await db
     .update(runtimeJobs)
-    .set({ status: "failed", errorMessage: input.message, finishedAt: new Date() })
+    .set({
+      status: "failed",
+      resultJson: { errorCode: input.code },
+      errorMessage: input.message,
+      finishedAt: new Date()
+    })
     .where(and(eq(runtimeJobs.id, input.runtimeJobId), eq(runtimeJobs.workerId, input.workerId)));
 }
 

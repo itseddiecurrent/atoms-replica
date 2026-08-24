@@ -27,6 +27,13 @@ six minutes because an expired Sandbox may legitimately require a dependency ins
 Preview health check before it can report success. Reconnecting to a live Sandbox renews its E2B
 TTL and persists the renewed expiry before Restart runs.
 
+If the original Sandbox has expired or cannot reconnect, recovery restores the persisted files,
+runs both dependency installation and `npm run build`, and only then starts the static Preview
+server. Failed Runtime Jobs persist a source-free stage code such as
+`SANDBOX_TTL_RENEWAL_FAILED`, `SANDBOX_RESTORE_BUILD_FAILED`, `PREVIEW_START_FAILED`, or
+`PREVIEW_HEALTH_FAILED`; the workspace and Gate display that code without exposing the provider
+response, generated source, or credentials.
+
 The generated Project is deleted in `finally`, including when an assertion fails. The evidence
 record contains IDs, statuses, and behavioral results only; it never prints the session cookie,
 credentials, Prompt text, browser request headers, or generated source.
@@ -63,7 +70,7 @@ same browser Gate once with `restartPolicyType: NEVER`. Configure only:
 Do not give this service database, Supabase service-role, Firebase Admin, OpenAI, or E2B keys. A
 successful Deploy Log ends with `Preview production acceptance passed` and contains a
 `Preview Production Acceptance Record`. The first lines must identify release
-`step6-browser-preview-interaction-v7` and the Railway source commit; reject logs from an older
+`step6-browser-preview-interaction-v8` and the Railway source commit; reject logs from an older
 release even if they were produced by manually restarting an earlier deployment.
 
 ## Log boundary check

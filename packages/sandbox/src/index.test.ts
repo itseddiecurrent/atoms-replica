@@ -5,6 +5,7 @@ import {
   E2BSandboxAdapter,
   SANDBOX_PREVIEW_SERVER_SOURCE,
   SANDBOX_WORKDIR,
+  SandboxLifecycleError,
   ensureSandbox,
   normalizeSandboxPath,
   sandboxPreviewCommand,
@@ -122,7 +123,25 @@ describe("ensureSandbox", () => {
     expect(sandbox.runCommand).toHaveBeenCalledWith("npm install --no-audit --no-fund", {
       timeoutMs: 120_000
     });
+    expect(sandbox.runCommand).toHaveBeenCalledWith("npm run build", {
+      timeoutMs: 120_000
+    });
     expect(sandbox.startDevServer).toHaveBeenCalledWith({ port: 5173 });
+  });
+
+  it("does not start Preview when a restored project fails to build", async () => {
+    const sandbox = adapter();
+    sandbox.runCommand
+      .mockResolvedValueOnce({ exitCode: 0, stdout: "installed", stderr: "" })
+      .mockResolvedValueOnce({ exitCode: 1, stdout: "", stderr: "source detail" });
+
+    await expect(
+      ensureSandbox({ adapter: sandbox, projectFiles: [{ path: "src/App.tsx", content: "code" }] })
+    ).rejects.toMatchObject({
+      code: "SANDBOX_RESTORE_BUILD_FAILED",
+      message: "Sandbox restore build exited with code 1."
+    });
+    expect(sandbox.startDevServer).not.toHaveBeenCalled();
   });
 });
 
@@ -147,14 +166,18 @@ describe("E2BSandboxAdapter", () => {
   it("maps files and commands into the fixed workspace and caps output", async () => {
     const sandbox = fakeSandbox();
     const onProviderCall = vi.fn();
+    const sdk: E2BSandboxSdk = { create: vi.fn(), connect: vi.fn(async () => sandbox) };
     const adapter = new E2BSandboxAdapter({
-      sdk: { create: vi.fn(), connect: vi.fn(async () => sandbox) },
+      sdk,
       templateDir: resolve("../../templates/react-vite"),
       maxOutputChars: 3,
       onProviderCall
     });
     await adapter.connect("sb-test");
-    expect(sandbox.setTimeout).toHaveBeenCalledWith(15 * 60 * 1000);
+    expect(sandbox.setTimeout).toHaveBeenCalledWith(15 * 60 * 1000, {
+      requestTimeoutMs: 60_000
+    });
+    expect(sdk.connect).toHaveBeenCalledWith("sb-test", { requestTimeoutMs: 60_000 });
     await adapter.writeFile("src/App.tsx", "updated");
     await expect(adapter.readFile("src/App.tsx")).resolves.toBe("file contents");
     await expect(adapter.listFiles()).resolves.toEqual(["package.json", "src/App.tsx"]);
@@ -209,6 +232,34 @@ describe("E2BSandboxAdapter", () => {
       "https://5173-sb-test.e2b.app",
       expect.objectContaining({ headers: { "Cache-Control": "no-cache" } })
     );
+  });
+
+  it("classifies reconnect and TTL renewal failures without provider details", async () => {
+    const reconnecting = new E2BSandboxAdapter({
+      sdk: {
+        create: vi.fn(),
+        connect: vi.fn().mockRejectedValue(new Error("provider reconnect secret"))
+      }
+    });
+    await expect(reconnecting.connect("sb-test")).rejects.toEqual(
+      expect.objectContaining({
+        code: "SANDBOX_RECONNECT_FAILED",
+        message: "Could not reconnect to the existing E2B Sandbox."
+      })
+    );
+
+    const sandbox = fakeSandbox();
+    sandbox.setTimeout = vi.fn().mockRejectedValue(new Error("provider timeout secret"));
+    const renewing = new E2BSandboxAdapter({
+      sdk: { create: vi.fn(), connect: vi.fn(async () => sandbox) }
+    });
+    const error = await renewing.connect("sb-test").catch((caught) => caught);
+    expect(error).toBeInstanceOf(SandboxLifecycleError);
+    expect(error).toMatchObject({
+      code: "SANDBOX_TTL_RENEWAL_FAILED",
+      message: "Could not renew the E2B Sandbox lifetime."
+    });
+    expect(String(error)).not.toContain("provider timeout secret");
   });
 
   it("recursively lists files while omitting directory entries", async () => {
@@ -298,8 +349,17 @@ describe("E2BSandboxAdapter", () => {
     await adapter.connect("sb-test");
     await adapter.startDevServer();
 
-    await expect(adapter.getPreviewUrl()).rejects.toThrow(
-      /HTTP 502.*Sandbox-local probe: ECONNREFUSED.*exited with code 1.*address already in use/
+    const error = await adapter.getPreviewUrl().catch((caught) => caught);
+    expect(error).toMatchObject({
+      code: "PREVIEW_HEALTH_FAILED",
+      message: "The Preview did not become healthy."
+    });
+    expect((error as SandboxLifecycleError).cause).toEqual(
+      expect.objectContaining({
+        message: expect.stringMatching(
+          /HTTP 502.*Sandbox-local probe: ECONNREFUSED.*exited with code 1.*address already in use/
+        )
+      })
     );
   });
 });

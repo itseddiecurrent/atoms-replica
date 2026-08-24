@@ -696,7 +696,9 @@ export async function runPreviewBrowserAcceptance({
     assert.notEqual(
       terminalJob.terminal.body?.status,
       "failed",
-      terminalJob.terminal.body?.errorMessage ?? "Worker Preview restart failed."
+      [terminalJob.terminal.body?.errorCode, terminalJob.terminal.body?.errorMessage]
+        .filter(Boolean)
+        .join(": ") || "Worker Preview restart failed."
     );
     const completedJob = terminalJob.terminal;
     assert.equal(completedJob.body?.operation, "restart_preview");
