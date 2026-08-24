@@ -147,7 +147,7 @@
 - Gate 会拒绝事件缺失或乱序、进度倒退、验证 exit code 非零、空源码、非 HTTPS Preview 和 “Done” 等模糊总结；成功时输出不含凭据和源码的 Project ID、Run ID、事件数、文件数、验证命令与 Preview 证据。
 - 已新增 `docs/testing/first-production-generation.md`，记录部署前提、一条命令的生产 Gate、固定 Prompt 和针对本次反馈的八项 UI 手动检查。
 - 新增 Shared Event、Activity 格式化/进度、首次生成证据和 Worker 终态相关测试，覆盖明确消息、源码隔离、单调进度、失败保留、命令 exit code、真实文件边界和完整生产证据。
-- 当前受控开发环境不能访问公开生产服务；部署本次 Web/Worker commit 后，必须从可信本机运行 `pnpm test:generation`，其脱敏输出即为本版本的真实首次生成证据。
+- 已新增 `/railway.acceptance.json` 一次性线上 Runner 配置：第三个临时 `acceptance-runner` 从同一 GitHub commit 启动，直接请求 Railway Web 并由 Railway Worker 完成 OpenAI/E2B 生成；Restart Policy 为 `NEVER`，成功或失败均不会自动重跑消耗额度。其 Deploy Logs 中的脱敏输出即为本版本的真实首次生成证据。
 
 ### Step 6：验收 Preview 首次启动与交互 ⬜ 待完成
 

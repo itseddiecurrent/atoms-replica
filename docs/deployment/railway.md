@@ -1,7 +1,8 @@
 # Railway production contract
 
-This repository deploys as two Railway services from the same GitHub repository. Do not upload a
-local `.env` file and do not copy variables between services as one block.
+This repository deploys as two persistent Railway services from the same GitHub repository. A third
+temporary `acceptance-runner` service may be used for production acceptance. Do not upload a local
+`.env` file and do not copy variables between services as one block.
 
 ## Web service
 
@@ -56,6 +57,20 @@ the production baseline is `200000`. Keep both variables on the Worker only.
    The default is `https://*.e2b.app`; never use `*`.
 5. Use Node.js 24. The root `engines`, `.node-version`, and `.nvmrc` all pin the supported major.
 6. Configure an OpenAI Project budget and E2B limits outside this application.
+
+## Temporary acceptance runner
+
+- Config-as-code path: `/railway.acceptance.json`
+- Build: syntax and evidence-validator tests only
+- Start: `pnpm test:generation`
+- Restart policy: `NEVER`
+- Public networking: disabled
+- Variables: copy names from `deploy/acceptance.env.example`
+
+The Runner must target the Web service's public HTTPS URL so the evidence covers Railway edge,
+authentication, Web, Worker, OpenAI, E2B, PostgreSQL and Preview. It receives only dedicated E2E
+credentials and the Firebase browser key; it must not receive database, Firebase Admin, OpenAI, E2B
+or Supabase privileged secrets. Delete the service or its password after acceptance.
 
 ## Release gate
 

@@ -55,16 +55,19 @@ For a read-only prerequisite check:
 - Local variable template: [`.env.example`](./.env.example)
 - Railway Web variables: [`deploy/web.env.example`](./deploy/web.env.example)
 - Railway Worker variables: [`deploy/worker.env.example`](./deploy/worker.env.example)
+- Temporary Railway acceptance variables:
+  [`deploy/acceptance.env.example`](./deploy/acceptance.env.example)
 - Railway deployment contract: [`docs/deployment/railway.md`](./docs/deployment/railway.md)
 - Production smoke checklist:
   [`docs/testing/manual-production-smoke.md`](./docs/testing/manual-production-smoke.md)
 
 Railway deploys this monorepo as two services from `main`:
 
-| Service  | Config file            | Public network | Migration  |
-| -------- | ---------------------- | -------------- | ---------- |
-| `web`    | `/railway.web.json`    | HTTPS enabled  | Pre-deploy |
-| `worker` | `/railway.worker.json` | Disabled       | None       |
+| Service             | Config file                | Public network | Lifecycle       |
+| ------------------- | -------------------------- | -------------- | --------------- |
+| `web`               | `/railway.web.json`        | HTTPS enabled  | Persistent      |
+| `worker`            | `/railway.worker.json`     | Disabled       | Persistent      |
+| `acceptance-runner` | `/railway.acceptance.json` | Disabled       | Temporary, once |
 
 Only Railway Variables contain production secrets. A real `.env` or service-account JSON must never
 be committed or uploaded to either service.

@@ -30,6 +30,34 @@ The output is a source-free Markdown record containing timestamp, Project ID, Ru
 state, event count, stages, file count, validation commands, Preview URL, and the clear completion
 summary. It never includes credentials or generated source.
 
+## Run the Gate entirely on Railway
+
+For final production evidence, create a third temporary Railway service named `acceptance-runner` in
+the same Project and Environment as Web and Worker. Point it to the same GitHub repository and exact
+commit, then set its Config File path to `/railway.acceptance.json`.
+
+Set only these service-scoped variables on `acceptance-runner`:
+
+| Variable               | Value                                    |
+| ---------------------- | ---------------------------------------- |
+| `E2E_BASE_URL`         | The public Railway Web HTTPS URL         |
+| `E2E_EMAIL`            | Dedicated test account email             |
+| `E2E_PASSWORD`         | Dedicated test account password          |
+| `E2E_FIREBASE_API_KEY` | The Firebase browser API key used by Web |
+| `E2E_MAX_WAIT_MS`      | `720000`                                 |
+
+Do not copy Web, Worker, database, OpenAI, E2B, Firebase Admin, or Supabase secrets into this
+service. The Runner only acts like a remote browser against the public Web URL. Public Networking and
+a healthcheck are not required.
+
+The config uses `restartPolicyType: NEVER`, so the acceptance test runs exactly once per deployment
+and exits instead of retrying a failed test and consuming more Run/OpenAI/E2B quota. A successful
+deployment ends as `Completed`; its Deploy Logs contain the `First Production Generation Record`.
+Use Railway Redeploy when an intentional rerun is required.
+
+After saving the record, delete `acceptance-runner` or remove `E2E_PASSWORD`, then rotate the
+dedicated account password. Never add these Runner variables to Web or Worker.
+
 ## Manual UI check
 
 Use a private browser window and the dedicated test account. Create the same fixed Todo project and
