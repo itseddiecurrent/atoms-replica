@@ -56,6 +56,18 @@ type ViewMode = "preview" | "editor";
 type RunStatus =
   "queued" | "planning" | "coding" | "validating" | "running" | "failed" | "cancelled";
 
+const activeRunStatuses = ["queued", "planning", "coding", "validating"] as const;
+
+export function shouldRestorePreviewOnOpen(
+  previewUrl: string | undefined,
+  runStatus: string | undefined
+) {
+  return (
+    Boolean(previewUrl) &&
+    !activeRunStatuses.includes(runStatus as (typeof activeRunStatuses)[number])
+  );
+}
+
 // A cold Sandbox restore may spend up to two command-timeout windows installing dependencies and
 // waiting for the public Preview. Keep the browser alive long enough to receive that valid result.
 const RUNTIME_JOB_TIMEOUT_MS = 6 * 60_000;
@@ -80,6 +92,7 @@ export function Workspace({
   messages = []
 }: WorkspaceProps) {
   const router = useRouter();
+  const restorePreviewOnOpen = shouldRestorePreviewOnOpen(initialPreviewUrl, initialRunStatus);
   const fileSummaries = initialFiles.map((file) => ({
     ...file,
     kind: file.path.endsWith(".json") ? ("json" as const) : ("tsx" as const)
@@ -106,9 +119,12 @@ export function Workspace({
       ? initialRunStatus
       : "running"
   );
-  const [previewUrl, setPreviewUrl] = useState(initialPreviewUrl);
+  const [previewUrl, setPreviewUrl] = useState(
+    restorePreviewOnOpen ? undefined : initialPreviewUrl
+  );
   const [isHydrated, setIsHydrated] = useState(false);
-  const [isRestarting, setIsRestarting] = useState(false);
+  const [isRestarting, setIsRestarting] = useState(restorePreviewOnOpen);
+  const [previewRecoveryError, setPreviewRecoveryError] = useState<string | null>(null);
   const [isCancelling, setIsCancelling] = useState(false);
   const [failure, setFailure] = useState<{ code: string; message: string } | null>(
     initialRunErrorCode || initialRunErrorMessage
@@ -129,8 +145,14 @@ export function Workspace({
   );
   const seenEventIds = useRef(new Set<number>());
   const localActivityId = useRef(0);
+  const initialPreviewRestoreStarted = useRef(false);
 
-  useEffect(() => setIsHydrated(true), []);
+  useEffect(() => {
+    setIsHydrated(true);
+    if (!restorePreviewOnOpen || initialPreviewRestoreStarted.current) return;
+    initialPreviewRestoreStarted.current = true;
+    void restartPreview({ automatic: true });
+  }, []);
 
   function addLocalActivity(title: string, detail?: string, tone: ActivityItem["tone"] = "info") {
     localActivityId.current += 1;
@@ -395,8 +417,14 @@ export function Workspace({
     }
   }
 
-  async function restartPreview() {
+  async function restartPreview({ automatic = false }: { automatic?: boolean } = {}) {
     setIsRestarting(true);
+    setPreviewRecoveryError(null);
+    if (automatic)
+      addLocalActivity(
+        "Restoring Preview",
+        "Reconnecting the saved project to a healthy Sandbox port."
+      );
     try {
       const response = await fetch(`/api/projects/${projectId}/runtime/restart`, {
         method: "POST"
@@ -408,11 +436,13 @@ export function Workspace({
       if (!result.previewUrl) throw new Error("Preview restart completed without a URL.");
       setPreviewUrl(result.previewUrl);
       setRunStatus("running");
-      addLocalActivity("Preview restarted", result.previewUrl, "success");
+      addLocalActivity(automatic ? "Preview restored" : "Preview restarted", undefined, "success");
     } catch (error) {
+      const message = error instanceof Error ? error.message : "Preview restart failed.";
+      setPreviewRecoveryError(message);
       addLocalActivity(
-        "Preview restart failed",
-        error instanceof Error ? error.message : "Preview restart failed.",
+        automatic ? "Preview restore failed" : "Preview restart failed",
+        message,
         "error"
       );
     } finally {
@@ -481,7 +511,7 @@ export function Workspace({
             className="hidden items-center gap-2 rounded-lg border border-zinc-200 px-3 py-2 text-xs font-medium text-zinc-600 hover:bg-zinc-50 sm:flex"
             data-runtime-ready={isHydrated ? "true" : "false"}
             disabled={!isHydrated || isRestarting}
-            onClick={restartPreview}
+            onClick={() => void restartPreview()}
             type="button"
           >
             <RefreshCw className={`h-3.5 w-3.5 ${isRestarting ? "animate-spin" : ""}`} />
@@ -637,7 +667,7 @@ export function Workspace({
                   {failure.code === "SANDBOX_FAILED" ? (
                     <button
                       className="rounded-lg border border-red-300 px-2.5 py-1.5 font-semibold hover:bg-red-100"
-                      onClick={restartPreview}
+                      onClick={() => void restartPreview()}
                       type="button"
                     >
                       Restart preview
@@ -782,11 +812,25 @@ export function Workspace({
                   <div className="grid flex-1 place-items-center p-8 text-center">
                     <div>
                       <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-violet-50 text-violet-600">
-                        <Sparkles className="h-7 w-7" />
+                        {isRestarting ? (
+                          <LoaderCircle className="h-7 w-7 animate-spin" />
+                        ) : (
+                          <Sparkles className="h-7 w-7" />
+                        )}
                       </div>
-                      <h2 className="mt-5 text-lg font-semibold">Your preview is getting ready</h2>
+                      <h2 className="mt-5 text-lg font-semibold">
+                        {isRestarting
+                          ? "Reconnecting Preview"
+                          : previewRecoveryError
+                            ? "Preview unavailable"
+                            : "Your preview is getting ready"}
+                      </h2>
                       <p className="mt-2 max-w-sm text-sm leading-6 text-zinc-500">
-                        The Worker will generate your app and start a secure sandbox here.
+                        {isRestarting
+                          ? "The Worker is restoring the saved project and reopening its secure Sandbox port."
+                          : previewRecoveryError
+                            ? `${previewRecoveryError} Use Restart to try again.`
+                            : "The Worker will generate your app and start a secure sandbox here."}
                       </p>
                     </div>
                   </div>

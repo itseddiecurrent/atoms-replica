@@ -620,6 +620,15 @@ export async function updateProjectFileAndQueueSync(
   });
 }
 
+export function activeRestartPreviewJob(
+  job: { id: string; type: "sync_file" | "restart_preview" } | undefined
+) {
+  if (!job) return undefined;
+  if (job.type === "restart_preview")
+    return { status: "queued" as const, runtimeJobId: job.id, reused: true as const };
+  return { status: "runtime_busy" as const };
+}
+
 export async function queueProjectRuntimeJobForUser(
   db: Database,
   input: { projectId: string; userId: string; type: "restart_preview" }
@@ -639,7 +648,7 @@ export async function queueProjectRuntimeJobForUser(
       .limit(1);
     if (active) return { status: "active_run" as const };
     const [activeRuntimeJob] = await tx
-      .select({ id: runtimeJobs.id })
+      .select({ id: runtimeJobs.id, type: runtimeJobs.type })
       .from(runtimeJobs)
       .where(
         and(
@@ -648,7 +657,8 @@ export async function queueProjectRuntimeJobForUser(
         )
       )
       .limit(1);
-    if (activeRuntimeJob) return { status: "runtime_busy" as const };
+    const activeResult = activeRestartPreviewJob(activeRuntimeJob);
+    if (activeResult) return activeResult;
     const [job] = await tx
       .insert(runtimeJobs)
       .values({ projectId: input.projectId, type: input.type, payloadJson: {} })

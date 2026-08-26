@@ -5,7 +5,7 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn() })
 }));
 
-import { Workspace } from "./workspace";
+import { shouldRestorePreviewOnOpen, Workspace } from "./workspace";
 
 describe("Workspace", () => {
   it("renders the activity, files, and preview surfaces", () => {
@@ -63,7 +63,7 @@ describe("Workspace", () => {
     expect(html).toMatch(/data-runtime-ready="false"[^>]*disabled=""/);
   });
 
-  it("renders a persisted preview with strict iframe permissions", () => {
+  it("restores a persisted preview before exposing its possibly closed port", () => {
     const html = renderToStaticMarkup(
       <Workspace
         projectId="project-1"
@@ -72,9 +72,30 @@ describe("Workspace", () => {
       />
     );
 
+    expect(html).toContain("Reconnecting Preview");
+    expect(html).not.toContain('src="https://preview.example.com"');
+  });
+
+  it("keeps an existing preview visible while an active Run owns recovery", () => {
+    const html = renderToStaticMarkup(
+      <Workspace
+        projectId="project-1"
+        projectName="Water dashboard"
+        initialPreviewUrl="https://preview.example.com"
+        initialRunStatus="coding"
+      />
+    );
+
     expect(html).toContain('src="https://preview.example.com"');
     expect(html).toContain('sandbox="allow-scripts allow-forms allow-modals allow-popups"');
     expect(html).not.toContain("allow-same-origin");
+  });
+
+  it("auto-restores only persisted previews without an active Agent Run", () => {
+    expect(shouldRestorePreviewOnOpen("https://preview.example.com", "running")).toBe(true);
+    expect(shouldRestorePreviewOnOpen("https://preview.example.com", "failed")).toBe(true);
+    expect(shouldRestorePreviewOnOpen("https://preview.example.com", "coding")).toBe(false);
+    expect(shouldRestorePreviewOnOpen(undefined, "running")).toBe(false);
   });
 
   it("renders cancellation while a run is active", () => {
